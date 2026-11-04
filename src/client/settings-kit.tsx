@@ -261,7 +261,8 @@ export function SourceField({ field, value, saved, fact, onChange, labels, refre
           {value && !labels[String(value)] ? <option value={String(value)}>{String(value)}</option> : null}
           {Object.entries(labels).sort(byName).map(([option, name]) => <option key={option} value={option}>{name}</option>)}
         </select>
-        : <Input value={String(value ?? '')} readOnly={field.readonly} pattern={field.pattern} spellCheck={false}
+        : <Input type={field.secret ? 'password' : 'text'} autoComplete={field.secret ? 'new-password' : undefined}
+          value={String(value ?? '')} readOnly={field.readonly} pattern={field.pattern} spellCheck={false}
           onChange={event => onChange(event.target.value)} />}
     </Field>
     case 'fact': return <div className="dt-field">

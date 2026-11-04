@@ -95,7 +95,9 @@ export class SourceRegistry implements SourceScope {
   async send(message: OutboundMessage, commands: Commands): Promise<'sent' | 'gone' | 'waiting'> {
     const kind = this.kinds.get(message.channel.source)
     if (!kind) return 'waiting'
-    return kind.channel ? kind.channel.send({ commands }, message) : 'gone'
+    // The Channel sees the same resolved configuration its kind publishes, so a reply uses the current account.
+    const { config } = this.resolve(kind, this.settings().sources[kind.kind])
+    return kind.channel ? kind.channel.send({ commands }, message, config) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
     const link = this.kinds.get(channel.source)?.channel?.link(channel.address, links)
