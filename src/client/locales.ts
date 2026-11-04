@@ -32,8 +32,10 @@ const TEXT = {
   'source.feishu': ['飞书', 'Feishu'],
   'source.github': ['GitHub', 'GitHub'],
   'source.github-issue': ['GitHub Issue', 'GitHub Issue'],
+  'source.jira': ['JIRA', 'Jira'],
   'health.github': ['GitHub 来源', 'GitHub Source'],
   'health.feishu': ['飞书来源', 'Feishu Source'],
+  'health.jira': ['JIRA 来源', 'Jira Source'],
   'health.history': ['飞书补收', 'Feishu recovery'],
   'health.runtime': ['dsh-superagent', 'dsh-superagent'],
   'health.models': ['模型服务', 'Model service'],
@@ -570,6 +572,9 @@ const TEXT = {
   'reason.admission_ignored': ['准入设为忽略', 'Admission set to ignore'],
   'reason.chat_not_allowed': ['群不在监听的群里', 'Chat is not a listened chat'],
   'reason.direct_messages_not_allowed': ['私聊未开放', 'Direct messages are off'],
+  'reason.project_not_listened': ['Issue 不在监听的 JIRA 项目里', 'Issue is not in the listened Jira project'],
+  'reason.change_not_listened': ['这个变更类型不在监听', 'This change kind is not listened to'],
+  'reason.issue_type_not_listened': ['这个 Issue 类型不在监听', 'This issue type is not listened to'],
   'reason.observation_only': ['仅观察的群（旧版过滤）', 'Observe-only chat (legacy filter)'],
   'reason.untracked_source': ['线程未被订阅', 'Thread not subscribed'],
   'reason.issue_assigned': ['Issue 已有负责人', 'Issue has an assignee'],
@@ -745,6 +750,7 @@ const TEXT = {
   'healthCode.sourceOff': ['已关闭', HEALTH_TEXT.sourceOff],
   'healthCode.feishuCliUnset': ['来源已打开，还没有设置机器人的 lark-cli', HEALTH_TEXT.feishuCliUnset],
   'healthCode.feishuBotMissing': ['等待飞书机器人', HEALTH_TEXT.feishuBotMissing],
+  'healthCode.jiraUnset': ['来源已打开，还没有设置站点、项目或凭据', HEALTH_TEXT.jiraUnset],
   'healthCode.pollFailures': ['连续 {count} 次轮询失败，最近一次：{error}', HEALTH_TEXT.pollFailures],
 } as const satisfies Record<string, readonly [string, string]>
 export type DshSuperagentKey = keyof typeof TEXT
