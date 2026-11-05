@@ -30,18 +30,20 @@ export interface SourceContextDeps {
  * Builds the context for one Source kind. Health reports are restricted to entries declared by the kind and
  * bound to the active registration, becoming no-ops once unregistered.
  */
-export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }): SourceContext {
+export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; health: readonly string[] }, instanceId = kind.kind): SourceContext {
   const { store } = deps
   const health = deps.sources.healthEntries(kind.health)
+  const instance = deps.sources.instance(instanceId) ?? { id: instanceId, kind: kind.kind, enabled: false, config: {} }
   return {
+    instance: { id: instance.id, kind: instance.kind, ...(instance.label ? { label: instance.label } : {}) },
     get deployment() { return deps.deployment },
     commands: deps.commands,
     ready: deps.ready,
     configured: () => deps.configured(),
-    get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind) },
-    config: <C extends Record<string, unknown>>(id: string) => {
-      const instance = deps.sources.instance<C>(id)
-      return instance?.enabled ? instance.config : undefined
+    get problem() { return [deps.feishuProblem, deps.setupProblem].find(problem => problem?.place === kind.kind || problem?.place === instance.id) },
+    config: <C extends Record<string, unknown>>(_instanceId?: string) => {
+      const current = deps.sources.instance(instanceId)
+      return current?.enabled ? current.config as C : undefined
     },
     receive: trigger => deps.receive(trigger),
     atomic: work => store.atomic(work),
@@ -52,7 +54,7 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
     },
     threads: {
       get: key => store.threads.get(key),
-      subscribed: source => store.read.subscribedThreads(source),
+      subscribed: (source?: string) => store.read.subscribedThreads(source ?? instance.id),
       describe: (key, description) => store.threads.describe(key, description),
       patch: (key, meta) => { store.threads.patchMeta(key, meta) },
     },

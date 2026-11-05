@@ -80,7 +80,12 @@ function host(overrides: Partial<SourceContextDeps> = {}, register = true) {
   const receive = vi.fn(async (trigger: Parameters<Engine['receive']>[0]) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
-  const context = (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind)
+  const context = (target: string | { kind: string; health: readonly string[] }) => {
+    const id = typeof target === 'string' ? target : target.kind
+    const kind = sources.kindOf(id) ?? (typeof target === 'string' ? undefined : target)
+    if (!kind) throw new Error(`Source instance not found: ${id}`)
+    return sourceContextOf(parts, kind, id)
+  }
   return { ...parts, context, ctx: sourceContextOf(parts, jiraKind), engine, receive, health: board.all, board, store }
 }
 
@@ -111,6 +116,17 @@ describe('jira translation', () => {
     expect(said).toMatchObject({ meta: { change: 'commented', issue: 'ABC-1', commentId: 'c1' } })
     expect(said.text).toContain('Comment by Alice: Looks good')
     expect(said.id).toBe(key('jira', 'ABC-1', 'commented', `${saidComment.id}:${saidComment.created}`))
+  })
+  it('uses the instance id in Triggers, Threads, Channels and cursors', () => {
+    const triggers = issueTriggers(issue(), [], [], CONFIG, at(-5000), 'jira-ops')
+    expect(triggers).toHaveLength(1)
+    expect(triggers[0]).toMatchObject({ source: 'jira-ops', threads: [{ source: 'jira-ops', id: 'ABC-1' }],
+      channel: { source: 'jira-ops', thread: 'jira-ops:ABC-1' } })
+    expect(triggers[0]!.id).not.toBe(createdTrigger(issue(), CONFIG)!.id)
+    expect(jiraKind.find!('ABC-123', { id: 'jira-ops', kind: 'jira', enabled: true, config: CONFIG }))
+      .toEqual({ threads: ['jira-ops:ABC-123'], terms: [] })
+    expect(KV.jira.cursor('jira')).toBe('jira-cursor')
+    expect(KV.jira.cursor('jira-ops')).toBe('jira-cursor-jira-ops')
   })
   it('drops the agent\'s own writes and filters change kinds', () => {
     const value = issue({ reporter: { accountId: 'agent-account', displayName: 'Agent', accountType: 'atlassian' } })
@@ -186,7 +202,7 @@ describe('jira polling', () => {
     expect(await h.receive.mock.results[0]!.value).toBe('stored')
     // The created issue mentions the agent and its reporter is on the allowed list, so it is explicit.
     expect(h.engine.candidate(key('jira', 'ABC-1', 'created', value.fields.created))?.strength).toBe('explicit')
-    expect(h.store.get(KV.jira.cursor)?.scope).toContain('ABC')
+    expect(h.store.get(KV.jira.cursor('jira'))?.scope).toContain('ABC')
 
     await pollJira(h.ctx, CONFIG, new AbortController().signal)
     expect(await h.receive.mock.results.at(-1)!.value).toBe('duplicate')

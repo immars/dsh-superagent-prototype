@@ -17,7 +17,7 @@ import type { FeishuConfig } from './feishu.ts'
 
 export const runFeishu = (ctx: SourceContext, signal: AbortSignal): Promise<unknown> =>
   Promise.allSettled([watch, backfillLoop, chatNamesLoop].map(loop => loop(ctx, signal)))
-const enabled = (ctx: SourceContext): FeishuConfig | undefined => ctx.config<FeishuConfig>(SOURCE)
+const enabled = (ctx: SourceContext): FeishuConfig | undefined => ctx.config<FeishuConfig>()
 const bot = (ctx: SourceContext): FeishuBot => {
   const resolved = ctx.deployment.feishu
   if (!resolved) throw new Error('The Feishu Source has no working bot CLI')
@@ -195,7 +195,7 @@ export async function backfillChat(ctx: SourceContext, chatId: string, direct: b
   }
   await scan('chat', chatId)
   // A quiet topic is forgotten unless a subscribed Thread that is still polled follows it.
-  const followed = new Set(ctx.threads.subscribed(SOURCE).filter(thread => polled(ctx, thread))
+  const followed = new Set(ctx.threads.subscribed().filter(thread => polled(ctx, thread))
     .map(thread => String(thread.meta.threadId ?? ctx.triggers.latest(thread.key)?.meta.threadId ?? '')))
   for (const [id, seen] of Object.entries(topics)) {
     if (!followed.has(id) && Date.parse(until) - Date.parse(seen) >= POLL_HORIZON_MS) delete topics[id]
