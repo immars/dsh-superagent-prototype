@@ -65,10 +65,10 @@ The concepts above and their rules are reusable. The Source implementations, the
 
 | Part | In this repository |
 | --- | --- |
-| Source | Feishu: live events, history recovery, polling of subscribed topics. GitHub: notifications, subscribed Issues and pull requests, CI changes, pull requests merged or closed, and, where switched on, every new Issue, pull request and comment in the repository and the default branch's CI. JIRA: polling one project's changed issues, their status transitions, field updates and comments |
+| Source | Feishu: live events, history recovery, polling of subscribed topics. GitHub: notifications, subscribed Issues and pull requests, CI changes, pull requests merged or closed, and, where switched on, every new Issue, pull request and comment in the repository and the default branch's CI. JIRA: polling one project's changed issues, their status transitions, field updates and comments. GitLab: polling one project's issues, merge requests and notes, and merge request merges or closes |
 | Policy | Assessment rules, and each Source's allowed list, its sync, its bot list and its admission table |
 | Executor | A DSH Executor Session and a directory per Ticket, in an execution environment whose variables the Executor and the Sources register |
-| Channel | Feishu topic replies, GitHub comments and review thread replies, and JIRA issue comments |
+| Channel | Feishu topic replies, GitHub comments and review thread replies, JIRA issue comments, and GitLab issue and merge request notes |
 
 ## Glossary
 

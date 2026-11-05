@@ -144,8 +144,8 @@ Check dsh-superagent: run `scripts/dsh-superagent --profile superagent status` i
 
 Setup must succeed before polling or work starts. Overview lists missing requirements and links to their settings. A settings change runs setup again. If you fix something outside the application, such as CLI authentication, choose **Check again**.
 
-1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages.
-2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts and Feishu users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
+1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages. For GitLab, set the site, project, access token and agent account, then choose whether to receive every new issue, merge request and note or only those that mention the agent.
+2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts, Feishu users, JIRA users and GitLab users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
 3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of the repository:
 
    ```sh
@@ -187,7 +187,7 @@ Health entries are grouped by responsibility:
 | `evals` | Unavailable Evals from the last hour with no later judgement or dismissal |
 | `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | Stored work described in [003 Execution](003-execution.md); delivery counts waiting work, while reply covers Channel messages |
 | `worker` | Executor Session event handling; appears after its first failure |
-| `github`, `feishu`, `history` | Source polling, events and history recovery |
+| `github`, `feishu`, `history`, `jira`, `gitlab` | Source polling, events and history recovery |
 | `sync:<source id>` | Allowed-list synchronization |
 
 A refusal has a status and `error`, its English text:

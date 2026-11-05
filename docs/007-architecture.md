@@ -249,7 +249,7 @@ Each model request binds the Session to the current prompt revision. The revisio
 | `src/app/tools/main.ts`, `src/app/tools/executor.ts` | Tool arguments of the main Session and the Executor Sessions into calls of the core classes, and their results into cards |
 | `src/app/http.ts`, `src/app/views/`, `src/app/api.ts` | HTTP requests into calls, and Store reads into the panel's views; `api.ts` types every route for the panel |
 | `src/app/resources.ts`, `src/app/links.ts`, `src/app/cards.ts` | Resource names into reads, source messages into links, records into compact cards for models |
-| `src/sources/github*.ts`, `src/sources/feishu*.ts`, `src/sources/poll.ts` | GitHub and Feishu payloads into Triggers and Thread facts, and messages into CLI calls |
+| `src/sources/github*.ts`, `src/sources/feishu*.ts`, `src/sources/jira*.ts`, `src/sources/gitlab*.ts`, `src/sources/poll.ts` | GitHub, Feishu, JIRA and GitLab payloads into Triggers and Thread facts, and messages into CLI or HTTP calls |
 | `src/deployment.ts`, `src/setup.ts`, `src/infra/` | Setup probes and problems, CLI transport, the agent's process environment |
 
 ## Dependency rules
@@ -362,7 +362,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/registry.ts` | `SourceRegistry` |
 | `src/sources/host.ts` | `SourceHost`, `SourceContext`, `Health`, `health` and the fixed health texts |
 | `src/sources/runs.ts` | `runInstances`: one watch run per enabled Source instance, started and stopped as settings change |
-| `src/sources/poll.ts` | What GitHub and Feishu polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
+| `src/sources/poll.ts` | What GitHub, Feishu, JIRA and GitLab polling share: `POLL_HORIZON_MS`, `polled`, `cursorAt`, and `pollThreads`, which keeps a failure on its Thread as `pollError` |
 | `src/sources/github.ts` | The GitHub kind and plugin entry, exported as `./github-watch`: a poll round of notifications, the pull requests of open Tickets with their CI, and subscribed Threads |
 | `src/sources/github-trigger.ts` | GitHub comments, reviews, Issue bodies and CI changes as Triggers, and GitHub addresses |
 | `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
@@ -380,6 +380,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/jira-trigger.ts` | Jira issues, changelog histories and comments as Triggers with stable ids and change kinds |
 | `src/sources/jira-read.ts` | `jiraThreadContext`: an issue and its comments as the messages an assessment reads |
 | `src/sources/jira-channel.ts` | The JIRA Channel: an issue comment with a marker that makes retries idempotent |
+| `src/sources/gitlab.ts` | The GitLab kind and plugin entry, exported as `./gitlab-watch`: configuration, policy, environment variables, the poll loop and its cursors |
+| `src/sources/gitlab-client.ts` | The GitLab REST client: credentials, issue and merge request lists, notes, and reply posting |
+| `src/sources/gitlab-trigger.ts` | GitLab issues, merge requests and notes as Triggers with stable ids, separate issue and merge request Threads, and reply addresses |
+| `src/sources/gitlab-read.ts` | `gitlabThreadContext`: a work item and its notes as the messages an assessment reads |
+| `src/sources/gitlab-channel.ts` | The GitLab Channel: a note with a marker that makes retries idempotent |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -403,7 +408,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/jira.ts` are also the entries of the three Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch` and `./jira-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu and JIRA disabled.
+`src/sources/github.ts`, `src/sources/feishu.ts`, `src/sources/jira.ts` and `src/sources/gitlab.ts` are also the entries of the four Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch`, `./jira-watch` and `./gitlab-watch`. The bundle's `cordis.patch.yml` inserts the five plugins, with Feishu, JIRA and GitLab disabled.
 
 ## Tests
 
@@ -415,6 +420,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/jira.spec.ts` | The JIRA Source: translation by change kind, JQL, scoped polling and its cursor, thread context, the comment Channel, health |
+| `tests/gitlab.spec.ts` | The GitLab Source: translation, scoped polling and its cursors, thread context, the note Channel, health |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
