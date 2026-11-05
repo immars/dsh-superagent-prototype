@@ -31,6 +31,28 @@ describe('Source registry', () => {
       { id: 'retired', kind: 'retired', enabled: true, config: { x: 1 }, installed: false },
     ])
   })
+  it('resolves additional instances by their stored kind and keeps their policy and scope separate', () => {
+    const settings = SettingsSchema.parse({
+      sources: { 'feishu-ops': { kind: 'feishu', enabled: true, config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }], directMessages: false } } },
+      policy: { sources: { 'feishu-ops': { allowed: [{ id: 'ou_alice' }] } } },
+    })
+    const sources = new SourceRegistry(() => settings)
+    sources.register(feishuKind)
+    expect(sources.instances().map(({ id, kind, installed }) => ({ id, kind, installed }))).toEqual([
+      { id: 'feishu', kind: 'feishu', installed: true },
+      { id: 'feishu-ops', kind: 'feishu', installed: true },
+    ])
+    expect(sources.kindOf('feishu-ops')?.kind).toBe('feishu')
+    expect(sources.instance('feishu-ops')).toMatchObject({ id: 'feishu-ops', kind: 'feishu', enabled: true,
+      config: { chats: [{ chatId: 'oc_team', listen: 'mentions' }], directMessages: false } })
+    expect(sources.scope({ source: 'feishu-ops', meta: { chatId: 'oc_team', direct: false } }))
+      .toEqual({ listened: true, observed: false, row: 'oc_team' })
+    expect(sources.validatePolicy({ 'feishu-ops': { allowed: [{ id: 'ou_alice' }] } }))
+      .toEqual({ 'feishu-ops': { allowed: [{ id: 'ou_alice' }], syncChat: '', admission: {} } })
+    expect(sources.policyPart('feishu-ops')).toEqual({ allowed: [{ id: 'ou_alice' }], syncChat: '', admission: {} })
+    // The default instance remains virtual and is still listed first.
+    expect(sources.instance('feishu')).toMatchObject({ id: 'feishu', kind: 'feishu', enabled: true })
+  })
   it('validates submitted instances with the kind schema and refuses kinds that are not installed', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(probe)
