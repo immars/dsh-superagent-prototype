@@ -575,13 +575,13 @@ function feishuThreadLinks(store: Store): void {
 function issueSourceRecords(store: Store): void {
   store.db.exec(`UPDATE trigger SET value = json_set(value, '$.source', 'github') WHERE value ->> '$.source' = 'github-issue'`)
   const pending = store.get('github-issue-pending' as Key<Record<string, { number: number; at: string }>>) ?? {}
-  const retries = { ...store.get(KV.github.retries) }
+  const retries = { ...store.get(KV.github.retries('github')) }
   for (const { number, at } of Object.values(pending)) {
     if (!(Date.now() - Date.parse(at) < POLL_HORIZON_MS)) continue
     const retry = retries[number]
     retries[number] = { ...retry, since: retry && retry.since < at ? retry.since : at, pr: retry?.pr ?? false }
   }
-  if (Object.keys(retries).length) store.set(KV.github.retries, retries)
+  if (Object.keys(retries).length) store.set(KV.github.retries('github'), retries)
   const kept = ['github-issue-pending', 'github-issues-since', 'github-issues-started-at', ...store.keys('github-issue-eligibility:')]
   for (const name of kept) store.delete(name)
 }
@@ -589,7 +589,7 @@ function issueSourceRecords(store: Store): void {
 function githubCursors(store: Store): void {
   for (const name of [...store.keys('github-thread:'), ...store.keys('thread-since:github:')]) {
     const at = store.get<string>(name as Key<string>)
-    const cursor = KV.github.cursor(Number(name.slice(name.lastIndexOf(':') + 1)))
+    const cursor = KV.github.cursor('github', Number(name.slice(name.lastIndexOf(':') + 1)))
     const current = store.get(cursor)
     if (at && !(current && current >= at)) store.set(cursor, at)
     store.delete(name)

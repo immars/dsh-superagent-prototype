@@ -1,6 +1,6 @@
 /** Starts and reconciles one Source watch run per enabled instance. */
 import { setTimeout as delay } from 'node:timers/promises'
-import type { SourceContext, SourceHost } from './host.ts'
+import { health, type SourceContext, type SourceHost } from './host.ts'
 import type { SourceKind } from './kind.ts'
 
 const SYNC_MS = 5000
@@ -22,7 +22,11 @@ export async function runInstances(host: SourceHost, kind: SourceKind, watch: (c
   const sync = (): void => {
     const active = new Map<string, { id: string }>()
     for (const instance of host.sources.instances()) {
-      if (instance.installed && instance.kind === kind.kind && instance.enabled) active.set(instance.id, instance)
+      if (!instance.installed || instance.kind !== kind.kind) continue
+      if (instance.enabled) { active.set(instance.id, instance); continue }
+      // Keep the existing “off” health status even though a disabled instance has no run.
+      const entry = kind.health[0]
+      if (entry) host.context(instance.id).report(entry, health('paused', 'sourceOff'))
     }
     for (const id of runs.keys()) if (!active.has(id)) stop(id)
     for (const id of active.keys()) {

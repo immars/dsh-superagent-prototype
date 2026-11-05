@@ -43,11 +43,14 @@ export const KV = {
    * per-stream cursor, start times by kind, and ETag; default-branch CI state; and per-PR CI fingerprint and revision (`revision`
    * counts reported CI changes so each produces a distinct Trigger ID).
    */
-  github: { since: record<string>('github-since'), retries: record<Record<string, Retry>>('github-retry'),
-    cursor: family<string, [number: number]>('github-cursor:'),
-    stream: family<{ since: string; started: Record<string, string>; etag?: string }, [stream: string]>('github-stream:'),
-    branchCi: record<{ branch?: string; failures?: string[]; revision: number }>('github-branch-ci'),
-    ci: family<{ fingerprint: string; revision: number }, [number: number]>('github-ci:') },
+  github: { since: family<string, [instance: string]>('github-since', instance => instance === 'github' ? '' : `-${instance}`),
+    retries: family<Record<string, Retry>, [instance: string]>('github-retry', instance => instance === 'github' ? '' : `-${instance}`),
+    cursor: family<string, [instance: string, number: number]>('github-cursor', (instance, number) => instance === 'github' ? `:${number}` : `-${instance}:${number}`),
+    stream: family<{ since: string; started: Record<string, string>; etag?: string }, [instance: string, stream: string]>('github-stream',
+      (instance, stream) => instance === 'github' ? `:${stream}` : `-${instance}:${stream}`),
+    branchCi: family<{ branch?: string; failures?: string[]; revision: number }, [instance: string]>('github-branch-ci', instance => instance === 'github' ? '' : `-${instance}`),
+    ci: family<{ fingerprint: string; revision: number }, [instance: string, number: number]>('github-ci:',
+      (instance, number) => instance === 'github' ? `${number}` : `${instance}:${number}`) },
   /**
    * JIRA Source: the read cursor and the query it belongs to. A changed site, project, issue-type filter or extra JQL
    * starts a new cursor so a new query never resumes inside an old one.
