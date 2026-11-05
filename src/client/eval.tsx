@@ -176,7 +176,7 @@ function PolicyBlock() {
         {parts.length > 1 && <div className="dt-subtabs" role="tablist" aria-label={t('policyPerSource')}>
           {parts.map(source => <button key={source.id} type="button" role="tab" aria-selected={source === current} className="dt-subtab"
             onClick={() => setTab(source.id)}>
-            {localized(t, source.title)}
+            {localized(t, source.title)}{source.id === source.kind ? '' : ` · ${source.id}`}
           </button>)}
         </div>}
         <SourcePart key={current.id} source={current} part={part(current.id)}

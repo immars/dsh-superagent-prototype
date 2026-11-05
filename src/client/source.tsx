@@ -1,21 +1,26 @@
 /** Source status view (health, filtered Triggers, dropped replies) and Source settings cards. */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { FieldSpec } from '../sources/kind.ts'
 import { usePoll, type DroppedReply, type SourceStatusRow, type SourceView } from './api.ts'
-import { DisclosureRow, Dot, Icon, InfoTip, Switch, Tag } from './controls.tsx'
+import { Button, DisclosureRow, Dot, Icon, InfoTip, Input, Switch, Tag } from './controls.tsx'
 import { SaveBar } from './draft.tsx'
 import { sourceMark } from './marks.ts'
 import { usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
-import { ConfigHistory, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { actorName, healthText, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
+import { ConfigHistory, Field, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
+import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
 import { CheckSetupButton, Hint, LabelValue, LoadState, SetupMessage, StatusHead, When } from './widgets.tsx'
 
 function SourceCard({ source }: { source: SourceView }) {
-  const { t, call } = usePanel()
+  const { t, call, notify } = usePanel()
   const { running } = usePanelData()
   const { reload } = useSettings()
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const remove = async () => {
+    if (!confirm(t('sourceRemoveConfirm', { name }))) return
+    try { await call('DELETE sources/:id', { id: source.id }); await reload() }
+    catch (failure) { notify(errorText(failure)) }
+  }
   const refreshLabels = async () => { const { added } = await call('POST sources/:id/labels',
     { id: source.id }); await reload(); return added }
   const draft = useBlockDraft(`source:${source.id}`, source.value, source.revision)
@@ -24,6 +29,7 @@ function SourceCard({ source }: { source: SourceView }) {
   const changed = (key: string) => String(value.config[key] ?? '') !== String(saved.config[key] ?? '')
   // Saving a modified setup-sensitive field restarts dsh-superagent, interrupting running Assignments.
   const restarts = draft.dirty && source.restarts.some(changed)
+  const name = source.id === source.kind ? localized(t, source.title) : `${localized(t, source.title)} · ${source.label ?? source.id}`
   const description = localized(t, source.description)
   // Hide derived facts for unsaved field edits until the new value is saved.
   const field = (spec: FieldSpec) => <SourceField key={spec.key} field={spec} value={value.config[spec.key]} saved={saved.config[spec.key]}
@@ -36,12 +42,14 @@ function SourceCard({ source }: { source: SourceView }) {
       <div className="dt-card-head">
         <div className="dt-row-main">
           <div className="dt-row-title">
-            <span className="dt-card-title">{localized(t, source.title)}</span>{description && <InfoTip text={description} />}
+            <span className="dt-card-title">{name}</span>{description && <InfoTip text={description} />}
             {!source.installed && <Tag tone="warning">{t('sourceNotInstalled')}</Tag>}
           </div>
         </div>
         {source.installed && <Switch checked={value.enabled} onChange={enabled => draft.edit({ ...value, enabled })}
-          label={t('sourceEnable', { name: localized(t, source.title) })} />}
+          label={t('sourceEnable', { name })} />}
+        {source.installed && source.id !== source.kind && <Button variant="ghost" size="sm" icon={<Icon name="dismiss" />}
+          onClick={() => { void remove() }}>{t('sourceRemove')}</Button>}
       </div>
       {problem && <div className="dt-row-buttons">
         <p className="dt-error" role="status"><SetupMessage problem={problem} lead /></p><CheckSetupButton />
@@ -58,10 +66,58 @@ function SourceCard({ source }: { source: SourceView }) {
   </form>
 }
 
+function AddSource() {
+  const { t, call, notify } = usePanel()
+  const { settings, reload } = useSettings()
+  const [kind, setKind] = useState('')
+  const [label, setLabel] = useState('')
+  const [copyFrom, setCopyFrom] = useState('')
+  const [busy, setBusy] = useState(false)
+  const kinds = [...new Map(settings.sources.filter(source => source.installed).map(source => [source.kind, source])).values()]
+  const copies = settings.sources.filter(source => source.installed && source.kind === kind)
+  useEffect(() => { if (!kind && kinds[0]) setKind(kinds[0].kind) }, [kind, kinds])
+  useEffect(() => { setCopyFrom('') }, [kind])
+  const add = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!kind) return
+    setBusy(true)
+    try {
+      await call('POST sources', { body: { kind, ...(label.trim() ? { label: label.trim() } : {}), ...(copyFrom ? { copyPolicyFrom: copyFrom } : {}) } })
+      setLabel('')
+      setCopyFrom('')
+      await reload()
+      notify(t('sourceAdded', { name: label.trim() || kind }))
+    } catch (failure) { notify(errorText(failure)) } finally { setBusy(false) }
+  }
+  if (!kinds.length) return null
+  return <form className="dt-form dt-add-source" onSubmit={event => { void add(event) }}>
+    <div className="dt-card-head"><div className="dt-row-main"><div className="dt-row-title"><span className="dt-card-title">{t('sourceAdd')}</span>
+      <InfoTip text={t('sourceAddHint')} /></div></div></div>
+    <Fields disabled={busy}>
+      <Field label={t('sourceAddKind')}>
+        <select className="dt-select" value={kind} onChange={event => setKind(event.target.value)}>
+          {kinds.map(source => <option key={source.kind} value={source.kind}>{localized(t, source.title)}</option>)}
+        </select>
+      </Field>
+      <Field label={t('sourceAddLabel')}>
+        <Input value={label} maxLength={60} placeholder={kind} onChange={event => setLabel(event.target.value)} />
+      </Field>
+      <Field label={t('sourceAddCopy')} hint={t('sourceAddCopyHint')}>
+        <select className="dt-select" value={copyFrom} onChange={event => setCopyFrom(event.target.value)}>
+          <option value="">{t('sourceAddNone')}</option>
+          {copies.map(source => <option key={source.id} value={source.id}>{source.id === source.kind ? localized(t, source.title) : source.id}</option>)}
+        </select>
+      </Field>
+    </Fields>
+    <div className="dt-row-buttons"><Button type="submit" variant="primary" disabled={busy || !kind}>{t('sourceAddSubmit')}</Button></div>
+  </form>
+}
+
 export function SourceSettings({ focus }: { focus?: string }) {
   const { sources } = useSettings().settings
   useEffect(() => { if (focus) document.getElementById(`dt-source-${focus}`)?.scrollIntoView?.({ block: 'start' }) }, [focus])
   return <div className="dt-form">
+    <AddSource />
     {sources.map(source => <SourceCard key={source.id} source={source} />)}
     <ConfigHistory blocks={['source:']} />
   </div>

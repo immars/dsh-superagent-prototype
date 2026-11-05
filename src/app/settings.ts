@@ -45,7 +45,7 @@ const BLOCKS: Record<'policy' | 'eval' | 'executor' | 'source', Block> = {
     guard: (current, candidate, origin) => { if (origin !== 'panel' && environment(current) !== environment(candidate)) throw new UserError('panelOnlyEnvironment') },
   },
   source: {
-    parse: (value, sources, id) => sources.validate(id, z.object({ enabled: z.boolean(), config: z.unknown() }).parse(value)),
+    parse: (value, sources, id) => sources.validate(id, z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/).optional(), label: z.string().trim().max(60).optional(), enabled: z.boolean(), config: z.unknown(), removed: z.boolean().optional() }).strict().parse(value)),
     merge: (settings, value, id) => ({ ...settings, sources: { ...settings.sources, [id]: value as SettingsValue['sources'][string] } }),
     // Only the management panel may switch source accounts.
     guard: (current, candidate, origin) => { if (origin !== 'panel' && setupChanged(current, candidate)) throw new UserError('panelOnlyAccounts') },
@@ -153,7 +153,9 @@ export class Settings {
     const kind = block.startsWith('source:') ? 'source' : block
     if (!(kind in BLOCKS)) throw new UserError('unknownBlock', { block })
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
-    if (kind === 'source' && !sources.kindOf(id)) throw new UserError('sourceNotInstalled', { source: id })
+    if (kind === 'source' && !sources.kindOf(id) && !(value as { kind?: string } | undefined)?.kind) {
+      throw new UserError('sourceNotInstalled', { source: id })
+    }
     const parsed = rules.parse(value, sources, id)
     const current = store.settings()
     const candidate = rules.merge(current, parsed, id)
@@ -164,7 +166,7 @@ export class Settings {
       catch (error) { throw new UserError('modelUnavailable', { block, error: error instanceof Error ? error.message : String(error) }) }
     }
     rules.guard?.(current, candidate, origin)
-    if (setupChanged(current, candidate)) await this.host.setup.checkAccounts(block, candidate)
+    if (setupChanged(current, candidate) && candidate.sources[id]?.enabled !== false) await this.host.setup.checkAccounts(block, candidate)
     if (stale()) throw new SettingsConflict('Settings changed during the checks. Reload before saving.')
     // Re-read current settings after async checks in case unrelated blocks were saved concurrently.
     const old = store.settings()
@@ -234,7 +236,9 @@ export class Settings {
     const health = this.syncHealth(id)
     try {
       const revision = store.blockRevision('policy')
-      const part = await sources.kind(id)!.policy!.sync!.run(this.host.sourceHost, sources.policyPart(id)!, this.host.lifetime)
+      const kind = sources.kindOf(id)
+      if (!kind?.policy?.sync) throw new UserError('nothingToSync', { source: id })
+      const part = await kind.policy.sync.run(this.host.sourceHost, sources.policyPart(id)!, this.host.lifetime)
       if (revision !== store.blockRevision('policy')) throw new SettingsConflict('Policy changed during synchronization. Retry with the current settings.')
       const policy = store.settings().policy
       // Skip saving a new revision when the synced list is unchanged.
@@ -250,6 +254,47 @@ export class Settings {
       throw error
     }
   }
+  /** Creates one additional Source instance, disabled with its kind's defaults. Optionally copies another instance's policy part. */
+  async createSource(kindId: string, label?: string, copyPolicyFrom?: string) {
+    const { store, sources } = this.host
+    const kind = sources.kind(kindId)
+    if (!kind) throw new UserError('sourceNotInstalled', { source: kindId })
+    const id = this.sourceId(kindId, label)
+    const config = kind.schema.parse({})
+    const saved = await this.save(`source:${id}`, { kind: kindId, enabled: false, config }, 0, 'panel')
+    let policyCopied = false
+    if (copyPolicyFrom) {
+      const part = sources.policyPart(copyPolicyFrom)
+      if (!part) throw new UserError('sourceNotInstalled', { source: copyPolicyFrom })
+      const policy = store.settings().policy
+      await this.save('policy', { ...policy, sources: { ...policy.sources, [id]: part } }, store.blockRevision('policy'), 'panel')
+      policyCopied = true
+    }
+    return { id, kind: kindId, enabled: false, config, revision: saved.revision, policyCopied }
+  }
+  /** Tombstones an additional Source instance; the default instance and one used by an open Ticket cannot be removed. */
+  async removeSource(id: string) {
+    const { store, sources } = this.host
+    const instance = sources.instance(id)
+    if (!instance) throw new UserError('unknownBlock', { block: `source:${id}` })
+    if (instance.kind === id) throw new UserError('sourceDefault')
+    if (store.tickets.open().some(ticket => ticket.mandate?.basis.source === id)) throw new UserError('sourceInUse')
+    const block = this.block(`source:${id}`)
+    const value = block.value as { enabled: boolean; config: Record<string, unknown> }
+    const saved = await this.save(`source:${id}`, { ...value, kind: instance.kind, enabled: false, removed: true }, block.revision, 'panel')
+    return { id, removed: true as const, revision: saved.revision }
+  }
+  /** A stable id derived from the kind and label, avoiding existing instances and installed kind ids. */
+  private sourceId(kindId: string, label?: string): string {
+    const current = this.host.store.settings()
+    const used = new Set([...Object.keys(current.sources), ...this.host.sources.instances().map(instance => instance.id)])
+    const slug = (label ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
+    const base = slug ? (slug.startsWith(`${kindId}-`) ? slug : `${kindId}-${slug}`) : kindId
+    let id = base
+    for (let n = 2; used.has(id) || this.host.sources.kind(id); n += 1) id = `${base}-${n}`
+    return id
+  }
+
   /**
    * Rereads a Source's display names (such as Feishu chat names) immediately.
    * @returns Sorted display names (`{ added }`) that were not present in the stored label map before this read.

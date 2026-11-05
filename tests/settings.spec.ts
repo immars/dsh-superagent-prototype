@@ -99,3 +99,18 @@ it('records nothing for a pause that changes nothing, refuses a sync while setup
   vi.mocked(Setup.prototype.configured).mockRestore()
   expect(() => settings.block('source:x')).toThrow(new UserError('unknownBlock', { block: 'source:x' }))
 })
+
+it('creates an additional Source instance, copies its policy, and tombstones it on removal', async () => {
+  h = await startRuntime()
+  const { settings, store, sources } = h.runtime
+  const created = await settings.createSource('feishu', 'Ops', 'feishu')
+  expect(created).toMatchObject({ id: 'feishu-ops', kind: 'feishu', enabled: false, policyCopied: true })
+  expect(store.settings().sources['feishu-ops']).toMatchObject({ kind: 'feishu', enabled: false })
+  expect(store.settings().policy.sources['feishu-ops']).toEqual(store.settings().policy.sources.feishu)
+  expect(sources.instances().some(instance => instance.id === 'feishu-ops')).toBe(true)
+  await expect(settings.removeSource('feishu')).rejects.toMatchObject({ code: 'sourceDefault' })
+  const removed = await settings.removeSource('feishu-ops')
+  expect(removed).toMatchObject({ id: 'feishu-ops', removed: true })
+  expect(store.settings().sources['feishu-ops']).toMatchObject({ kind: 'feishu', removed: true })
+  expect(sources.instances().some(instance => instance.id === 'feishu-ops')).toBe(false)
+})

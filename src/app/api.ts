@@ -23,6 +23,8 @@ export interface Api {
   'GET search': { query: { q: string }; response: SearchView }
   'GET sources': { response: SourceStatusView[] }
   'GET settings': { response: SettingsView }
+  'POST sources': { body: { kind: string; label?: string; copyPolicyFrom?: string }; response: { id: string; kind: string; enabled: boolean; config: Record<string, unknown>; revision: number; policyCopied: boolean } }
+  'DELETE sources/:id': { response: { id: string; removed: true; revision: number } }
   'POST sources/:id/labels': { response: { added: string[] } }
   'GET threads': { query?: Paged & { filter?: ThreadFilter }; response: ThreadListView }
   'GET threads/:key': { query?: { limit?: number; before?: string; around?: string }; response: ThreadDetailView }
