@@ -30,6 +30,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 - [009 JIRA Source](docs/009-jira-source.md): how the JIRA Source polls a project, and why it does not use webhooks
+- [010 Source instances](docs/010-source-instances.md): the proposal for several instances of one Source kind
 
 ## Development
 
