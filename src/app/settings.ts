@@ -153,7 +153,7 @@ export class Settings {
     const kind = block.startsWith('source:') ? 'source' : block
     if (!(kind in BLOCKS)) throw new UserError('unknownBlock', { block })
     const rules = BLOCKS[kind as keyof typeof BLOCKS]
-    if (kind === 'source' && !sources.kind(id)) throw new UserError('sourceNotInstalled', { source: id })
+    if (kind === 'source' && !sources.kindOf(id)) throw new UserError('sourceNotInstalled', { source: id })
     const parsed = rules.parse(value, sources, id)
     const current = store.settings()
     const candidate = rules.merge(current, parsed, id)
@@ -217,7 +217,7 @@ export class Settings {
     const { sources } = this.host
     if (!this.host.setup.configured()) return []
     return sources.instances().filter(instance => instance.installed && instance.enabled).flatMap(instance => {
-      const sync = sources.kind(instance.id)?.policy?.sync
+      const sync = sources.kindOf(instance.id)?.policy?.sync
       const part = sources.policyPart(instance.id)
       return sync && part && sync.ready(part) ? [instance.id] : []
     })
@@ -258,7 +258,7 @@ export class Settings {
   async refreshLabels(id: string): Promise<{ added: string[] }> {
     const { store, sources } = this.host
     const instance = sources.instance(id)
-    const kind = instance && sources.kind(instance.kind)
+    const kind = instance && sources.kindOf(id)
     if (!kind?.refreshLabels) throw new UserError('noLabels')
     const before = store.get(KV.sources.labels(id)) ?? {}
     const after = await kind.refreshLabels(this.host.sourceHost)
