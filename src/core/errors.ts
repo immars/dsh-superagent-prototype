@@ -42,6 +42,8 @@ export const USER_ERRORS = {
   promptPlaceholders: ['refused', 'The “{part}” template must keep {placeholders}, which the system fills in'],
   promptPartEmpty: ['refused', 'The “{part}” part cannot be empty; reset it to follow its built-in text'],
   sourceNotInstalled: ['refused', 'The {source} Source kind is not installed'],
+  sourceDefault: ['refused', 'The default Source instance cannot be removed'],
+  sourceInUse: ['refused', 'The Source instance is used by an open Ticket'],
   noLabels: ['refused', 'This Source has no names to refresh'],
   nothingToSync: ['refused', 'The {source} Source\'s part of the Policy has nothing to sync from, or the Source is off or waiting for setup'],
 } as const satisfies Record<string, readonly ['missing' | 'refused', string]>

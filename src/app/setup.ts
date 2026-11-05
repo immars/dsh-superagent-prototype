@@ -60,9 +60,14 @@ export class Setup {
   /** Verify account CLIs for a modified source block before saving, ignoring setup errors belonging to other blocks. */
   async checkAccounts(block: SettingsBlock, settings: Settings): Promise<void> {
     const { machine } = this.host
-    const check = block === 'source:feishu' ? resolveFeishuBot(machine, settings.sources.feishu?.config, this.probe())
-      : resolveDeployment(machine, settings.sources.github?.config, this.probe())
-    await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === block.slice(7)) throw error })
+    const id = block.startsWith('source:') ? block.slice(7) : undefined
+    if (!id) return
+    const kind = settings.sources[id]?.kind ?? id
+    const config = settings.sources[id]?.config
+    const check = kind === 'feishu' ? resolveFeishuBot(machine, config, this.probe())
+      : kind === 'github' ? resolveDeployment(machine, config, this.probe()) : undefined
+    if (!check) return
+    await check.catch((error: unknown) => { if (!(error instanceof SetupError) || error.place === kind) throw error })
   }
   async blockCommands(blocked: readonly string[]): Promise<void> {
     if (this.resolved) await writeEnvironment(this.resolved, blocked)
