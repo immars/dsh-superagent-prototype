@@ -52,7 +52,7 @@ export const KV = {
    * JIRA Source: the read cursor and the query it belongs to. A changed site, project, issue-type filter or extra JQL
    * starts a new cursor so a new query never resumes inside an old one.
    */
-  jira: { cursor: record<{ scope: string; since: string }>('jira-cursor') },
+  jira: { cursor: family<{ scope: string; since: string }, [instance: string]>('jira-cursor', instance => instance === 'jira' ? '' : `-${instance}`) },
   /**
    * Feishu Source: known chats (`true` for direct messages); per-chat history cursor and active topics mapped from topic ID
    * to last-seen timestamp; and per-polled-thread seen message IDs and initialization flag.

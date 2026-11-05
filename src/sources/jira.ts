@@ -10,6 +10,7 @@ import { issueTriggers, jiraIssueUrl, SOURCE } from './jira-trigger.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import type { Localized, SourceKind } from './kind.ts'
 import { cursorAt, pause } from './poll.ts'
+import { runInstances } from './runs.ts'
 
 export { JIRA_CHANGES, type JiraChange } from './jira-client.ts'
 export { adfDocument, adfText, jiraBodyText, jiraJql, jiraTime, JiraError } from './jira-client.ts'
@@ -117,9 +118,10 @@ export const jiraKind: SourceKind<JiraConfig> = {
     link: jiraLink,
   },
   threadContext: jiraThreadContext,
-  find(query) {
+  find(query, instance) {
     const issue = /(?:^|\/browse\/|\b)([A-Za-z][A-Za-z0-9]+-\d+)\b/.exec(query)?.[1]
-    return { threads: issue ? [`${SOURCE}:${issue.toUpperCase()}`] : [], terms: [] }
+    const id = instance?.id ?? SOURCE
+    return { threads: issue ? [`${id}:${issue.toUpperCase()}`] : [], terms: [] }
   },
   policy: {
     unnamed: { person: { zh: 'JIRA 用户', en: 'Jira user' }, bot: { zh: 'JIRA 自动化账号', en: 'Jira automation account' } },
@@ -180,7 +182,7 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
   if (!ctx.configured()) { ctx.report('jira', health('paused', 'setupPending')); return }
   let failures = 0
   while (!signal.aborted) {
-    const config = ctx.config<JiraConfig>(SOURCE)
+    const config = ctx.config<JiraConfig>()
     if (!config) ctx.report('jira', health('paused', 'sourceOff'))
     else if (!jiraReady(config)) ctx.report('jira', health('paused', 'jiraUnset'))
     else {
@@ -209,7 +211,7 @@ export interface PollResult { read: number; unreadable: number }
 export async function pollJira(ctx: SourceContext, config: JiraConfig, signal: AbortSignal): Promise<PollResult> {
   const started = new Date().toISOString()
   const scope = [config.site, config.project, config.issueTypes, config.jql].join('\n')
-  const previous = ctx.state.get(KV.jira.cursor)
+  const previous = ctx.state.get(KV.jira.cursor(ctx.instance.id))
   const since = previous?.scope === scope ? previous.since : cursorAt(started)
   const client = new JiraClient(config, signal)
   const found = await client.search(jiraJql(config, since))
@@ -222,18 +224,18 @@ export async function pollJira(ctx: SourceContext, config: JiraConfig, signal: A
     if (types.length && !types.some(type => sameName(type, issue.fields.issuetype?.name ?? ''))) continue
     const histories = changes.has('updated') || changes.has('transitioned') ? await client.changelog(issue.key) : []
     const comments = changes.has('commented') ? await client.allComments(issue.key) : []
-    for (const trigger of issueTriggers(issue, histories, comments, config, since)) {
+    for (const trigger of issueTriggers(issue, histories, comments, config, since, ctx.instance.id)) {
       if (signal.aborted) throw new Error('The Jira Source stopped during the read')
       await ctx.receive(trigger)
       read += 1
     }
-    ctx.threads.describe(`jira:${issue.key}`, { label: `${issue.key} ${issue.fields.summary}`.trim(), url: jiraIssueUrl(config, issue.key),
+    ctx.threads.describe(`${ctx.instance.id}:${issue.key}`, { label: `${issue.key} ${issue.fields.summary}`.trim(), url: jiraIssueUrl(config, issue.key),
       facts: {
         project: { label: { zh: '项目', en: 'Project' }, value: issue.fields.project?.key ?? config.project },
         type: { label: { zh: '类型', en: 'Type' }, value: issue.fields.issuetype?.name ?? '' },
         status: { label: { zh: '状态', en: 'Status' }, value: issue.fields.status?.name ?? '' },
       } })
   }
-  ctx.atomic(() => ctx.state.set(KV.jira.cursor, { scope, since: cursorAt(started) }))
+  ctx.atomic(() => ctx.state.set(KV.jira.cursor(ctx.instance.id), { scope, since: cursorAt(started) }))
   return { read, unreadable: found.skipped }
 }

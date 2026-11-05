@@ -42,8 +42,13 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive, ...overrides }
   // The Sources' functions take the context; plugin entries and kind callbacks take the host, which builds each kind's context.
-  const value = { ...parts, context: (kind: { kind: string; health: readonly string[] }) => sourceContextOf(parts, kind) }
-  const context = sourceContextOf(parts, { kind: 'feishu', health: ['github', 'feishu', 'history'] })
+  const value = { ...parts, context: (target: string | { kind: string; health: readonly string[] }) => {
+    const id = typeof target === 'string' ? target : target.kind
+    const kind = sources.kindOf(id) ?? (typeof target === 'string' ? undefined : target)
+    if (!kind) throw new Error(`Source instance not found: ${id}`)
+    return sourceContextOf(parts, kind, id)
+  } }
+  const context = sourceContextOf(parts, { kind: 'github', health: ['github', 'feishu', 'history'] })
   const health = overrides.sources ? healthOf.get(overrides.sources)!.all : board.all
   return { ...value, ...context, health, store, engine, commands: parts.commands, receive, executor }
 }
@@ -137,14 +142,14 @@ describe('feishu source', () => {
       if (args[1] === '+messages-mget') return { messages: [] }
       return { thread_id: 'omt_1', has_more: false, messages: [mine, reply, earlier] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     expect(h.receive).toHaveBeenCalledTimes(1)
     expect(h.receive.mock.calls[0]![0]).toMatchObject({ id: key('feishu', 'om_reply'), threads: [{ source: 'feishu', id: 'oc_1:om_root' }],
       actor: { id: 'ou_guest' }, human: true, text: 'more details', meta: expect.objectContaining({ threadId: 'omt_1' }) })
     expect(h.store.get('thread-seen:feishu:oc_1:om_root')).toEqual(expect.arrayContaining(['om_reply', 'om_mine', 'om_old']))
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta).toMatchObject({ threadId: 'omt_1', url: 'https://applink.feishu.cn/client/chat/open?openChatId=oc_1', facts: { chat: { value: 'oc_1' } } })
     lark.mockRejectedValue(new Error('rate limited'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     expect(h.store.threads.get('feishu:oc_1:om_root')?.meta.pollError).toContain('rate limited')
     h.store.close()
   })
@@ -168,7 +173,7 @@ describe('feishu source', () => {
       const messages = [page('om_mine', { id: 'cli_bot', sender_type: 'app' }), page('om_reply', { id: MEMBER, sender_type: 'user' })]
       return { thread_id: 'omt_dm', has_more: false, messages }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     const live = feishuTrigger({ message_id: 'om_reply', chat_id: 'oc_dm', chat_type: 'p2p', sender_id: MEMBER, sender_type: 'user',
       content: 'and the header',
       create_time: String(Date.parse('2026-09-11 12:00')), root_id: 'om_root', thread_id: 'omt_dm' }, 'ou_bot', 'cli_bot')
@@ -190,10 +195,10 @@ describe('feishu source', () => {
     h.store.threads.save({ ...h.store.threads.get('feishu:oc_1:om_root')!,
       lastAt: new Date(Date.now() - 15 * 24 * 3600_000).toISOString() })
     const lark = vi.spyOn(h.commands, 'lark').mockResolvedValue({ items: [] })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     expect(lark).not.toHaveBeenCalled()
     h.store.tickets.save(openTicket('ticket'))
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     expect(lark).toHaveBeenCalled()
     h.store.close()
   })
@@ -210,7 +215,7 @@ describe('feishu source', () => {
     vi.spyOn(h.commands, 'withSignal').mockReturnValue(h.commands)
     vi.spyOn(h.commands, 'lark').mockResolvedValue({ has_more: false, items: [] })
     const now = new Date().toISOString()
-    await backfillChat(h, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
+    await backfillChat(h.context(feishuKind), 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
     expect(h.store.get('feishu-history-threads:oc_team')).toEqual({ omt_followed: old })
     h.store.close()
   })
@@ -221,7 +226,7 @@ describe('feishu source', () => {
       sender: { id: MEMBER, sender_type: 'user' }, body: { content: '{"text":"hi"}' }, ...fields })
     const lark = vi.spyOn(h.commands, 'lark')
     const now = new Date().toISOString()
-    const recover = () => backfillChat(h, 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
+    const recover = () => backfillChat(h.context(feishuKind), 'oc_team', false, new Date(Date.now() - 60_000).toISOString(), now, new AbortController().signal)
     lark.mockResolvedValueOnce({ has_more: false, items: [message({ chat_id: 'oc_other' })] })
     await expect(recover()).rejects.toThrow('outside the requested chat or thread')
     // A topic's page that holds a message of another topic.
@@ -253,7 +258,7 @@ describe('feishu source', () => {
       // Newest first: a new reply, then the one the Thread knew, and an older page that is not read.
       return { thread_id: 'omt_1', has_more: true, page_token: 'older', messages: [reply('om_3'), reply('om_2')] }
     })
-    await pollFeishuThreads(h)
+    await pollFeishuThreads(h.context(feishuKind))
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.messageId)).toEqual(['om_3'])
     expect(lark.mock.calls.filter(([args]) => args[1] === '+threads-messages-list')).toHaveLength(1)
     h.store.close()
@@ -277,7 +282,7 @@ describe('feishu source', () => {
     for (round = 0; round < 30; round++) {
       scans.length = 0
       const since = new Date(start + round * day - 60_000).toISOString()
-      await backfillChat(h, 'oc_team', false, since, new Date(start + round * day + 60_000).toISOString(), new AbortController().signal)
+      await backfillChat(h.context(feishuKind), 'oc_team', false, since, new Date(start + round * day + 60_000).toISOString(), new AbortController().signal)
       if (round === 0) expect(scans).toContain('omt_old')
     }
     // The chat, and the topics with a message in the last 14 days.
@@ -296,7 +301,7 @@ describe('feishu source', () => {
       chat_id: 'oc_team' }] })
     const tally = { skipped: 0 }
     const since = new Date(Date.now() - 60_000).toISOString()
-    await backfillChat(h, 'oc_team', false, since, new Date().toISOString(), new AbortController().signal, tally)
+    await backfillChat(h.context(feishuKind), 'oc_team', false, since, new Date().toISOString(), new AbortController().signal, tally)
     expect(tally.skipped).toBe(1)
     expect(h.receive.mock.calls.map(([trigger]) => trigger.meta.messageId)).toEqual(['om_good'])
     h.store.close()
@@ -1004,9 +1009,9 @@ describe('source context', () => {
   })
   it('reads the configuration of an instance that is on, removes a record set to undefined, and merges ticket meta', () => {
     const h = host()
-    expect(h.config('feishu')).toMatchObject({ directMessages: true })
+    expect(h.context(feishuKind).config()).toMatchObject({ directMessages: true })
     h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources, feishu: { enabled: false, config: {} } } })
-    expect(h.config('feishu')).toBeUndefined()
+    expect(h.context(feishuKind).config()).toBeUndefined()
     h.state.set('github-retry', { 1: {} })
     h.state.set('github-retry', undefined)
     expect(h.store.keys('github-retry')).toEqual([])
