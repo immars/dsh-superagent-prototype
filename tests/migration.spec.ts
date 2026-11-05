@@ -409,9 +409,9 @@ it('writes the Sources\' records in their current shape once, so no Source conve
   expect(store.threads.get('feishu:oc_team:om_9')!.meta.url).toBe('https://applink.feishu.cn/client/chat/open?openChatId=oc_team')
   expect(store.triggers.get('issue')!.source).toBe('github')
   // The waiting mention within the polling horizon is read again; the older one is no fresh request.
-  expect(store.get(KV.github.retries)).toEqual({ 12: { since: recent, pr: false } })
-  expect(store.get(KV.github.cursor(7))).toBe('2026-09-03T00:00:00.000Z')
-  expect(store.get(KV.github.cursor(8))).toBe('2026-09-04T00:00:00.000Z')
+  expect(store.get(KV.github.retries('github'))).toEqual({ 12: { since: recent, pr: false } })
+  expect(store.get(KV.github.cursor('github', 7))).toBe('2026-09-03T00:00:00.000Z')
+  expect(store.get(KV.github.cursor('github', 8))).toBe('2026-09-04T00:00:00.000Z')
   for (const name of ['github-issue-pending', 'github-issues-since', 'github-thread:7', 'thread-since:github:7', 'github-thread:8']) {
     expect(store.get(name)).toBeUndefined()
   }
