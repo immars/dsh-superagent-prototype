@@ -57,6 +57,12 @@ export const KV = {
    */
   jira: { cursor: family<{ scope: string; since: string }, [instance: string]>('jira-cursor', instance => instance === 'jira' ? '' : `-${instance}`) },
   /**
+   * GitLab Source: the project read cursor and the observation scope it belongs to; per-instance, per-Thread note cursors
+   * of subscribed issues and merge requests. The default instance keeps today's key strings.
+   */
+  gitlab: { cursor: family<{ scope: string; since: string }, [instance: string]>('gitlab-cursor', instance => instance === 'gitlab' ? '' : `-${instance}`),
+    thread: family<string, [thread: string]>('gitlab-thread:') },
+  /**
    * Feishu Source: the account's known chats (`true` for direct messages); per-instance, per-chat history cursor and active
    * topics mapped from topic ID to last-seen timestamp; and per-instance, per-polled-thread seen message IDs and
    * initialization flag. The default instance keeps today's key strings.

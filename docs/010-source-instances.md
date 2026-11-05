@@ -10,7 +10,7 @@ Today each Source kind has exactly one configuration. A deployment can watch one
 
 - The **Source instance** becomes the identity used by Triggers, Threads, Channels, Policies, health and state.
 - A **Source kind** stays the plugin implementation. Settings store any number of instances of each kind.
-- The existing instance of each kind keeps its current id (`github`, `feishu`, `jira`), and its Triggers, Threads, Policy parts, cursors and health names remain byte-for-byte compatible. No stored record has to be migrated to upgrade.
+- The existing instance of each kind keeps its current id (`github`, `feishu`, `jira`, `gitlab`), and its Triggers, Threads, Policy parts, cursors and health names remain byte-for-byte compatible. No stored record has to be migrated to upgrade.
 - New instances use new, immutable ids such as `github-infra` or `jira-platform`. They never reuse an id, including after removal.
 
 The proposal is deliberately generic. Nothing in the registry, settings, policy, health, state or UI may be specific to GitHub or Jira beyond a kind's own plugin code.
@@ -28,7 +28,7 @@ The current single-instance design is not only a UI limitation. These assumption
 | One health entry exists per kind (`github`, `feishu`, `history`, `jira`) | `SourceKind.health`, `HealthBoard`, Source status, overview, status script |
 | Source KV records are keyed by kind (`github-since`, `jira-cursor`, …) | `src/kv.ts`, every polling loop |
 | One `SourceContext` exists per kind and `config(kind)` reads that kind's entry | `sourceContextOf`, every Source plugin |
-| A Source plugin starts exactly one polling loop | plugin `apply` in `github.ts`, `feishu.ts`, `jira.ts` |
+| A Source plugin starts exactly one polling loop | plugin `apply` in `github.ts`, `feishu.ts`, `jira.ts`, `gitlab.ts` |
 | The deployment has one GitHub repository and one `gh`/`lark-cli` worker identity | `Deployment.repository`, `Commands`, worker shims, execution environment |
 | Thread keys are `kind:native-id`, so two repositories would both use `github:12` | Trigger and Thread construction in every kind |
 | The worker opens pull requests in the one deployment repository | pull binding, executor tools, `DSH_SUPERAGENT_GITHUB_REPOSITORY` |
@@ -52,7 +52,7 @@ Some changes below are wider than the visible feature: a run lifecycle, per-inst
 ## Non-goals for this proposal
 
 - **Multiple worker accounts or bots per kind.** GitHub and Feishu each have one installation-level worker command (`gh` and `lark-cli`, including the git credential helper and the worker's `lark-cli` shim). Multiple instances of those kinds therefore share that account and bot. [001 Domain model](001-domain.md) says an instance holds its own bot identity; in this version that identity is the installation bot the instance acts through, not a distinct credential. Per-instance worker accounts and bots are a separate change to the execution environment.
-- **A second repository kind in this change.** GitHub is the first repository-capable kind. The capability interface is designed so a GitLab kind can supply targets later, but implementing GitLab is separate work.
+- **A second repository kind in this change.** GitHub is the first repository-capable kind. The capability interface is designed so a GitLab kind can supply targets later, but giving the GitLab Source repository capability is separate work.
 - **More than one execution repository per Ticket.** A Ticket has zero or one target repository. It may subscribe to Threads of several repository instances for context; subscriptions do not add targets.
 - **Sharing a Thread or a Ticket between instances.** A Thread belongs to exactly one instance. Related work across instances is context, not an alias.
 - **A separate process or state directory per instance.** All instances share one Store, lock and runtime.
@@ -169,7 +169,7 @@ A few app-layer helpers currently compare a raw `source` with a kind string inst
 - `src/sources/github-pull.ts` parses Thread keys with `${SOURCE}:`, filters PRs by bare number, checks the deployment repository, and skips terminal notices for every non-`github` channel.
 - `src/sources/github-channel.ts` uses the deployment repository for replies.
 - `src/sources/feishu-trigger.ts` tests `trigger.source === SOURCE` in `feishuRef`/`feishuParent`.
-- The `environment.values` functions in `github.ts`, `feishu.ts` and `jira.ts` test `trigger.source === SOURCE`; each must compare with the selected instance id.
+- The `environment.values` functions in `github.ts`, `feishu.ts`, `jira.ts` and `gitlab.ts` test `trigger.source === SOURCE`; each must compare with the selected instance id.
 
 For pull binding, the target instance's Thread prefix scopes the PR number: `pullsOf`/`pullNumber` must parse `target.source` and a terminal notice must skip every GitHub-kind channel, not every channel whose source is exactly `github`. Two repositories can both have PR #12 without binding to each other.
 
@@ -530,7 +530,7 @@ This is a cross-cutting feature, not one local edit. Implement it in reviewable 
 4. **Jira and Feishu:** multiple projects/sites and chat scopes; the account-level Feishu event consumer; per-instance sync, labels and cursors.
 5. **Documentation and migration checks:** cookbook, deployment, panel, status script and upgrade tests.
 
-A future GitLab kind is separate work: it implements `repository(instance)` and its own worker environment/tools, while the Engine and Ticket target stay unchanged. Phases 1 and 2 are the generic capability; phases 3 and 4 can be separate PRs per kind. The current document is the design review gate before phase 1 starts.
+Giving the GitLab Source repository capability is separate work: it would implement `repository(instance)` and its own worker environment/tools, while the Engine and Ticket target stay unchanged. Phases 1 and 2 are the generic capability; phases 3 and 4 can be separate PRs per kind. The current document is the design review gate before phase 1 starts.
 
 ## Review decisions
 
@@ -565,4 +565,4 @@ The PR #5 review settled these points; the design above follows them.
 - Should the two additive instance variables (`DSH_SUPERAGENT_SOURCE_INSTANCE` and `DSH_SUPERAGENT_SOURCE_KIND`) be kept? Proposed: yes; they make a worker's instance explicit and cost nothing.
 - Should target selection stay a field on `orchestrator_route accept`, or become a separate tool? Proposed: the field, because target choice is part of accepting one Ticket.
 
-GitLab support, multi-repository execution for one Ticket, and per-instance worker accounts/bots remain future work.
+GitLab repository targets, multi-repository execution for one Ticket, and per-instance worker accounts/bots remain future work.
