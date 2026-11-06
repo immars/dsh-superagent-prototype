@@ -21,6 +21,7 @@ const CONFIG: JiraConfig = JiraConfigSchema.parse({
   site: 'https://acme.atlassian.net', project: 'ABC', user: 'bot@example.com', token: 't0ken',
   agentAccount: 'agent-account', agentName: 'Agent',
 })
+const SERVER_CONFIG: JiraConfig = JiraConfigSchema.parse({ ...CONFIG, site: 'https://jira.example.com', platform: 'server' })
 const at = (offset: number): string => new Date(Date.now() + offset).toISOString()
 function issue(fields: Record<string, unknown> = {}, keyValue = 'ABC-1'): JiraIssue {
   return {
@@ -206,6 +207,21 @@ describe('jira polling', () => {
 
     await pollJira(h.ctx, CONFIG, new AbortController().signal)
     expect(await h.receive.mock.results.at(-1)!.value).toBe('duplicate')
+  })
+  it('reads a Server changelog through the issue expansion, not the Cloud-only changelog resource', async () => {
+    const h = host()
+    const value = issue(), historyValue = history()
+    const calls = serve({
+      'GET /rest/api/2/search': () => ({ issues: [value], startAt: 0, total: 1 }),
+      'GET /rest/api/2/issue/ABC-1': () => ({ ...value, changelog: { startAt: 0, maxResults: 1, total: 1, histories: [historyValue] } }),
+    })
+    const config = JiraConfigSchema.parse({ ...SERVER_CONFIG, changes: [{ change: 'created' }, { change: 'updated' }, { change: 'transitioned' }] })
+    const result = await pollJira(h.ctx, config, new AbortController().signal)
+    expect(result).toEqual({ read: 2, unreadable: 0 })
+    expect(h.receive.mock.calls.map(call => call[0].meta.change).sort()).toEqual(['created', 'transitioned'])
+    expect(calls.map(call => call.url.pathname)).toEqual(['/rest/api/2/search', '/rest/api/2/issue/ABC-1'])
+    expect(calls[1]!.url.searchParams.get('expand')).toBe('changelog')
+    expect(calls.some(call => call.url.pathname.endsWith('/changelog'))).toBe(false)
   })
   it('does not read the changelog or comments when only new issues are listened to', async () => {
     const h = host()
