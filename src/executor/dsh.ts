@@ -4,7 +4,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mkdir, rmdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { key, latestAssignment, latestReport, liveTicket, runningAssignment, threadKey, waitsForPerson } from '../core/index.ts'
+import { key, latestAssignment, latestReport, liveTicket, runningAssignment, scheduleText, threadKey, waitsForPerson } from '../core/index.ts'
 import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, ExecutionTarget, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
@@ -105,10 +105,13 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   const rules = settings.policy.rules.filter(rule => ruleIds?.includes(rule.id))
     .map(rule => `\n- ${rule.name} (${rule.id}): ${rule.instruction}`).join('')
   const precedence = rules ? `\nMatched rules; their procedure and communication instructions take precedence over the default acknowledgement and messaging policy for this ticket:${rules}` : ''
+  // A periodic task's first Assignment is its first run; say that the host, not the worker, owns the schedule.
+  const schedule = ticket.schedule ? `\nThis is a standing periodic task: ${scheduleText(ticket.schedule)}. The host starts each run; do not wait, poll `
+    + 'or change the schedule. Report each run\'s result with orchestrator_report ready and expect the next run.' : ''
   // The origin trigger is delivered alongside the assignment, so `assignment` omits the trigger text.
   const assignment = ticket.mandate.strength === 'inferred' && ruleIds
-    ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}`
-    : note.trim()
+    ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}${schedule}`
+    : `${note}${schedule}`.trim()
   return { name, directory: join(executionRoot(settings, stateDir), name), assignment }
 }
 /** Character limits for inline assignment and trigger text in worker messages; longer text is read via its resource. */
@@ -152,17 +155,27 @@ function policyMessage(effect?: PolicyEffect): string {
 export const inputResource = (ticketId: string, inputId: string): string => `ticket/${ticketId}/input/${key(inputId)}`
 /**
  * Formats a ticket input for worker delivery: a `trigger` rendered via `trigger` (or by its ID and read path when absent),
- * a `policy-changed` notice, a `resumed` notice, an orchestrator `note`, or a `text` input as written.
- * Returns `undefined` for legacy `reopen` inputs, which are historical only because the schema 11 migration converted pending reopen inputs into text inputs.
+ * a `policy-changed` notice, a `resumed` notice, one `scheduled-run` of a standing task, an orchestrator `note`, or a
+ * `text` input as written. Returns `undefined` for legacy `reopen` inputs, which are historical only because the schema 11
+ * migration converted pending reopen inputs into text inputs.
  */
-export function inputMessage(input: TicketInput, trigger?: object): string | undefined {
+export function inputMessage(input: TicketInput, trigger?: object, ticket?: Ticket): string | undefined {
   // Mark triggers arriving on context-only subscriptions so the worker knows they are not addressed to the ticket.
   if (input.kind === 'trigger') return JSON.stringify({ ...trigger ?? { trigger_id: input.triggerId, read: `trigger/${input.triggerId}` },
     ...input.context ? { context: true } : {} })
   if (input.kind === 'policy-changed') return policyMessage(input.effect)
   if (input.kind === 'resumed') return RESUMED
+  if (input.kind === 'scheduled-run') return scheduledRunMessage(input, ticket)
   if (input.kind === 'note') return `Note from the orchestrator, for context only: ${input.text}`
   return input.kind === 'text' ? input.text : undefined
+}
+/** Formats one run of a periodic task: which task, when it was due, and that this run's ready report is not the task's end. */
+function scheduledRunMessage(input: Extract<TicketInput, { kind: 'scheduled-run' }>, ticket?: Ticket): string {
+  const schedule = ticket?.schedule
+  const heading = schedule ? `Scheduled run for this task (${scheduleText(schedule)}).` : 'Scheduled run for this task.'
+  const task = ticket ? `The task: ${ticket.title}.${ticket.mandate.scope ? ` ${ticket.mandate.scope}` : ''}` : ''
+  return [heading, `Scheduled for ${input.scheduledFor}; fired at ${input.at}.`, ...task ? [task] : [],
+    'Do this run\'s work and report ready with its result. This Ticket stays open for the next run.'].join('\n')
 }
 /**
  * Tracks active and starting worker sessions against the configured concurrency limit: a ticket holds a slot while its
@@ -355,7 +368,7 @@ export class DshExecutor implements Executor {
     }
     live()
     const trigger = input.kind === 'trigger' ? await this.triggerCard(ticket, input.triggerId, input.note) : undefined
-    const message = inputMessage(input, trigger)
+    const message = inputMessage(input, trigger, ticket)
     if (message === undefined) return
     const text = message.length > ASSIGNMENT_CHARS ? JSON.stringify(capped(message, ASSIGNMENT_CHARS, inputResource(ticket.id, input.id))) : message
     await this.host.sessions.prompt(workerSessionId(ticket.id), input.id, text, 'steer', live)

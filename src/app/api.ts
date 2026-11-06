@@ -9,7 +9,7 @@ import type { SourceStatusView } from './views/sources.ts'
 import type { DecisionListView, SearchView, ThreadDetailView, ThreadListView } from './views/threads.ts'
 import type { TicketListView } from './views/tickets.ts'
 
-export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'ended'] as const
+export const TICKET_FILTERS = ['open', 'person', 'working', 'idle', 'scheduled', 'ended'] as const
 export const THREAD_FILTERS = ['subscribed', 'evaluating', 'recent', 'all'] as const
 export type TicketFilter = typeof TICKET_FILTERS[number]
 export type ThreadFilter = typeof THREAD_FILTERS[number]

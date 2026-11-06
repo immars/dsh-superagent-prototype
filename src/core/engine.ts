@@ -15,7 +15,6 @@ export type { WorkerReport } from './assignments.ts'
 export type { Outcome } from './evals.ts'
 export type { ReceiveResult } from './intake.ts'
 export type { Reply, ReplyRequest } from './replies.ts'
-
 /**
  * Single transactional entry point for mutating Triggers, Threads, Decisions, Tickets, and Assignments.
  * Coordinates Intake, Evals, Tickets, Assignments, and Replies inside synchronous repository transactions while queuing side
@@ -66,6 +65,14 @@ export class Engine {
 
   // The clock
 
+  /**
+   * Record one due run of a periodic task: revalidate its Mandate, add a `scheduled-run` Input, set `lastRunAt` and advance
+   * `nextAt` in one transaction. It fires nothing while the task waits for a person or a previous run still works, and marks
+   * the schedule `paused` while the Mandate no longer holds.
+   * @returns Whether a run was recorded.
+   * @throws UserError when the ticket is unknown or its stored schedule is invalid.
+   */
+  fireScheduled(ticketId: string): boolean { return this.repo.atomic(() => this.tickets.fireScheduled(ticketId)) }
   /**
    * Requeues overdue Evals up to `REQUEUES` times before recording `unavailable` (undelivered Evals never expire), starts the
    * Evals of Threads whose queued Triggers wait, and resumes ended tickets a person's message reached while processing was
@@ -259,6 +266,8 @@ export class Engine {
 
 /** What Sources ask and tell the Engine. */
 export type EngineForSources = Pick<Engine, 'receive' | 'bindThread' | 'threadClosed'>
+/** What the clock asks of the Engine. */
+export type EngineForSchedules = Pick<Engine, 'fireScheduled'>
 /** What the main Session asks of the Engine. */
 export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivered' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'>
 /** What people ask of the Engine, through the panel or the main Session. */

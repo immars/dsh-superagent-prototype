@@ -6,6 +6,7 @@ import { decisionMark, reportDot, ticketMark } from './marks.ts'
 import { usePanel } from './provider.tsx'
 import { settingsRoute } from './route.ts'
 import { Earlier, ThreadLine, automatedRuns } from './rows.tsx'
+import { scheduleInterval } from './schedule.ts'
 import { actorName, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
 import { ActionLink, ConfirmButton, ExternalLink, Hint, KeyValues, LabelValue, LoadState, MarkdownLite, PageHead, Section, SessionButton,
   StageMark, When } from './widgets.tsx'
@@ -65,6 +66,25 @@ function Assignments({ ticket }: { ticket: TicketPageView }) {
       sessionId={item.ref} /></div>}
   </li>)}</ul>
 }
+function ScheduleDetails({ ticket }: { ticket: TicketPageView }) {
+  const { t } = usePanel()
+  const { schedule } = ticket
+  if (!schedule) return null
+  const paused = schedule.paused === 'policy'
+  const rows: [string, ReactNode][] = [
+    [t('scheduleIntervalLabel'), scheduleInterval(t, schedule)],
+    [t('scheduleZoneLabel'), schedule.timeZone],
+    [t('nextRunLabel'), paused ? t('scheduledPaused') : when(schedule.nextAt, t('lang'))],
+    ...schedule.lastRunAt ? [[t('lastRunLabel'), when(schedule.lastRunAt, t('lang'))] as [string, ReactNode]] : [],
+  ]
+  return <Section title={t('scheduleDetails')} icon="clock">
+    <KeyValues rows={rows} />
+    {ticket.deliveryProblem && <Hint>{t(ticket.deliveryProblem.kind === 'dropped' ? 'replyDropped' : 'replyFailing',
+      ticket.deliveryProblem.kind === 'failed' ? { error: ticket.deliveryProblem.error } : {})}</Hint>}
+    {paused && <Hint>{t('schedulePausedHint')}</Hint>}
+  </Section>
+}
+
 function MandateDetails({ ticket, actor }: { ticket: TicketPageView; actor: string }) {
   const { t, navigate } = usePanel()
   const { mandate, decision } = ticket
@@ -154,6 +174,7 @@ export function TicketPage({ id }: { id: string }) {
       <span className="dt-banner-label">{t('deliveryFailedPrefix')}</span>{data.deliveryError}
     </p>}
     <MandateDetails ticket={data} actor={actor} />
+    <ScheduleDetails ticket={data} />
     {undelivered.length > 0 && <Section title={t('undeliveredInputs')} count={undelivered.length}>
       <Hint>{data.deliveryError ? t('inputRetryHint') : data.paused ? t('inputPausedHint') : t('inputWaitingHint')}</Hint>
       <InputList inputs={undelivered} />

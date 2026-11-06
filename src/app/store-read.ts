@@ -70,6 +70,9 @@ export function storeReads(db: DatabaseSync) {
   failingReplies: (): (Receipt & { attempts: number; error: string })[] => db.prepare(`SELECT o.value, e.attempts, e.error FROM effect e
     JOIN outbox o ON o.id = e.key WHERE e.kind = 'reply' AND e.attempts > 0 ORDER BY e.seq`).all()
     .map(row => ({ ...JSON.parse(String(row.value)) as Receipt, attempts: Number(row.attempts), error: String(row.error) })),
+  /** The newest outbound message receipt for a ticket: pending, sent or dropped. */
+  lastReply: (ticketId: string): Receipt | undefined =>
+    values<Receipt>("SELECT value FROM outbox WHERE json_extract(value, '$.ticketId') = ? ORDER BY rowid DESC LIMIT 1", ticketId)[0],
   droppedReplies: (limit = 20): Dropped[] =>
     values('SELECT value FROM outbox WHERE dropped IS NOT NULL ORDER BY dropped DESC LIMIT ?', limit),
   droppedSince: (since: string): number => Number(db.prepare('SELECT COUNT(*) AS n FROM outbox WHERE dropped >= ?').get(since)?.n ?? 0),

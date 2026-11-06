@@ -10,6 +10,8 @@ const attention = { id: 'q', question: '?' }
 const answered = { inputs: [{ id: 'i', kind: 'trigger' as const, triggerId: 'e', at: 'later', human: true as const }] }
 const reportedAt = (state: ReportState) => reported(state, { report: { state, summary: '', at: 'earlier' } })
 const ended = { at: '', by: 'executor' as const, reason: 'closed', outcome: 'closed' as const }
+const schedule = { period: 'daily' as const, every: 1, at: '09:00', timeZone: 'UTC', nextAt: '2026-11-07T09:00:00.000Z', fromTriggerId: 'x' }
+const scheduled = (overrides: Partial<Ticket> = {}) => ticket({ schedule, ...overrides })
 
 // The rows of the docs/003 table, in order; a Ticket that matches several rows takes the first.
 describe('ticketStage', () => {
@@ -21,15 +23,23 @@ describe('ticketStage', () => {
     ['answer before a failure', ticket({ attention, assignments: [reported('failed')] }), { stage: 'person', action: 'answer' }],
     ['a ready Report', ticket({ assignments: [reported('ready')] }), { stage: 'person', action: 'review' }],
     ['a ready Report of an ended Assignment', ticket({ assignments: [reported('ready', { state: 'ended' })] }), { stage: 'person', action: 'review' }],
+    ['a ready Report of a periodic task', scheduled({ assignments: [reported('ready')] }), { stage: 'scheduled' }],
+    ['a ready Report of a periodic task whose Mandate paused', scheduled({ schedule: { ...schedule, paused: 'policy' }, assignments: [reported('ready')] }),
+      { stage: 'scheduled' }],
     ['a blocked Report', ticket({ assignments: [reported('blocked')] }), { stage: 'person', action: 'blocked' }],
+    ['a blocked Report of a periodic task', scheduled({ assignments: [reported('blocked')] }), { stage: 'person', action: 'blocked' }],
     ['a failed Report', ticket({ assignments: [reported('failed')] }), { stage: 'person', action: 'failed' }],
     ['a blocked Report a person answered since', ticket({ ...answered, assignments: [reportedAt('blocked')] }), { stage: 'working' }],
     ['no Assignment', ticket({ assignments: [] }), { stage: 'working', action: 'queued' }],
     ['a pending Assignment', ticket({ assignments: [reported('failed', { state: 'ended' }), assignment({ state: 'pending' })] }), { stage: 'working', action: 'queued' }],
     ['a waiting Report', ticket({ assignments: [reported('waiting')] }), { stage: 'idle' }],
+    ['a waiting Report of a periodic task', scheduled({ assignments: [reported('waiting')] }), { stage: 'scheduled' }],
     ['an ended Assignment', ticket({ assignments: [assignment({ state: 'ended' })] }), { stage: 'idle' }],
+    ['an ended Assignment of a periodic task', scheduled({ assignments: [assignment({ state: 'ended' })] }), { stage: 'scheduled' }],
     ['a running Assignment', ticket(), { stage: 'working' }],
+    ['a running Assignment of a periodic task', scheduled(), { stage: 'working' }],
     ['a progress Report', ticket({ assignments: [reported('progress')] }), { stage: 'working' }],
+    ['a progress Report of a periodic task', scheduled({ assignments: [reported('progress')] }), { stage: 'working' }],
     ['an ended Ticket', ticket({ ended, attention, assignments: [reported('failed')] }), { stage: 'ended' }],
   ])('%s', (_name, value, stage) => { expect(ticketStage(value)).toEqual(stage) })
 })

@@ -1,5 +1,5 @@
 /** Compact, bounded model-facing projections of triggers, tickets, threads, and decisions; full texts stay behind readable resources. */
-import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Mandate, type Thread, type Ticket, type TicketInput,
+import { latestReport, reasonText, threadKey, ticketStage, type Decision, type Mandate, type Schedule, type Thread, type Ticket, type TicketInput,
   type Trigger, type TriggerDisposition } from '../core/index.ts'
 import { pullOf } from '../sources/github-pull.ts'
 import { batchLine, inputResource } from '../executor/dsh.ts'
@@ -15,20 +15,25 @@ export function triggerCard(trigger: Trigger, disposition?: TriggerDisposition) 
 }
 /** The states a ticket card shows: an open ticket's stage (docs/003), and an ended ticket's outcome. */
 export const TICKET_STATES = ['person/delivery', 'person/answer', 'person/review', 'person/blocked', 'person/failed', 'working', 'working/queued', 'idle',
-  'completed', 'merged', 'closed', 'dropped', 'stopped'] as const
+  'scheduled', 'completed', 'merged', 'closed', 'dropped', 'stopped'] as const
 export type TicketCardState = typeof TICKET_STATES[number]
 function cardState(ticket: Ticket): TicketCardState {
   if (ticket.ended) return ticket.ended.outcome
   const stage = ticketStage(ticket)
   if (stage.stage === 'person') return `person/${stage.action}`
-  return stage.stage === 'idle' ? 'idle' : stage.stage === 'working' && stage.action ? 'working/queued' : 'working'
+  return stage.stage === 'idle' ? 'idle' : stage.stage === 'scheduled' ? 'scheduled' : stage.stage === 'working' && stage.action ? 'working/queued' : 'working'
 }
+/** A schedule as a model reads it, with snake_case fields and the zone it fires in. */
+export const scheduleCard = (schedule: Schedule) => ({ period: schedule.period, every: schedule.every, ...schedule.at ? { at: schedule.at } : {},
+  time_zone: schedule.timeZone, next_at: schedule.nextAt, ...schedule.lastRunAt ? { last_run_at: schedule.lastRunAt } : {},
+  ...schedule.paused ? { paused: schedule.paused } : {} })
 export function ticketCard(ticket: Ticket) {
   const ended = ticket.ended && { at: ticket.ended.at, by: ticket.ended.by, reason: ticket.ended.reason ?? ticket.ended.outcome }
   const { attention } = ticket
   return { ticket_id: ticket.id, title: ticket.title, state: cardState(ticket), strength: ticket.mandate.strength,
     ...(ticket.target ? { target: ticket.target } : {}),
     ...(pullOf(ticket) ? { pr_number: pullOf(ticket) } : {}), ...(ended ? { ended } : {}),
+    ...(ticket.schedule ? { schedule: scheduleCard(ticket.schedule) } : {}),
     ...(attention ? { attention: { question: attention.question, ...attention.triggerId ? { trigger_id: attention.triggerId } : {} } } : {}),
     preview: preview(latestReport(ticket)?.summary ?? ''), read: `ticket/${ticket.id}` }
 }
@@ -41,6 +46,7 @@ export function inputLine(ticket: Ticket, input: TicketInput, worker = false) {
   const read = { read: inputResource(ticket.id, input.id) }
   const names = input.kind === 'trigger' || input.kind === 'resumed' ? { trigger_id: input.triggerId }
     : input.kind === 'reopen' && !worker ? { decision_id: input.decisionId }
+    : input.kind === 'scheduled-run' ? { scheduled_for: input.scheduledFor, ...read }
     : input.kind !== 'text' ? read
     : input.text.length <= INPUT_TEXT ? { text: input.text }
     : { preview: preview(input.text).slice(0, INPUT_TEXT), chars: input.text.length, ...read }

@@ -4,7 +4,8 @@ import type { DecisionRow, ThreadFacts, ThreadRow, TicketRow } from './api.ts'
 import { Icon, Tag } from './controls.tsx'
 import { decisionMark, threadMark, ticketMark } from './marks.ts'
 import { usePanel } from './provider.tsx'
-import { actorName, localized, readableMarkers, reasonLabel, valueLabel } from './text.ts'
+import { scheduleInterval } from './schedule.ts'
+import { actorName, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
 import { ActionLink, ConfirmButton, LabelValue, SessionButton, StageMark, When } from './widgets.tsx'
 
 export function TicketLine({ ticket, question, onChanged, context }: {
@@ -23,12 +24,20 @@ export function TicketLine({ ticket, question, onChanged, context }: {
       <div className="dt-row-meta dt-ticket-meta">
         {ticket.threads.map(thread => <ThreadChip key={thread.key} thread={thread} />)}
         {context && <ContextTag />}
+        {ticket.schedule && <LabelValue label={t('scheduleIntervalLabel')} value={scheduleInterval(t, ticket.schedule)} />}
+        {ticket.schedule && ticket.schedule.paused !== 'policy' && <LabelValue label={t('nextRunLabel')}
+          value={when(ticket.schedule.nextAt, t('lang'))} />}
+        {ticket.schedule && ticket.requestedBy && <LabelValue label={t('requesterLabel')} value={actorName(t, ticket.requestedBy)} />}
         {ticket.undelivered > 0 && <LabelValue label={t('ticketUndeliveredLabel')} value={ticket.undelivered} />}
         {note ? <span className={note.error ? 'dt-ticket-note dt-ticket-note-error' : 'dt-ticket-note'} title={note.text}>{note.text}</span>
           : <When at={ticket.updatedAt} />}
       </div>
       {/* Always render the actions container so every Ticket row keeps a uniform three-line height. */}
       <div className="dt-ticket-actions">{onChanged && <>
+        {ticket.deliveryProblem && <span className="dt-line-text dt-error-text">{t(ticket.deliveryProblem.kind === 'dropped' ? 'replyDropped'
+          : 'replyFailing', ticket.deliveryProblem.kind === 'failed' ? { error: readableMarkers(t, ticket.deliveryProblem.error) } : {})}</span>}
+        {ticket.stage === 'scheduled' && ticket.summary && <span className="dt-ticket-note" title={ticket.summary}>{readableMarkers(t,
+          ticket.summary.split('\n')[0]!)}</span>}
         {answer && <ActionLink href={answer.url} icon="message">{t('answerIn', { source: valueLabel(t, 'source',
           answer.source) })}</ActionLink>}
         {ticket.actions.retry && <ConfirmButton variant="outline" icon="refresh" label={t('retry')} title={t('retryTitle')}

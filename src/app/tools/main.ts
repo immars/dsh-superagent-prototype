@@ -17,6 +17,21 @@ import { AcknowledgementSchema, readTool, tool, type Tool } from './tool.ts'
 const RoutingNoteSchema = z.string().trim()
   .refine(text => wordCount(text) <= NOTE_WORDS, `Routing note must not exceed ${NOTE_WORDS} words (Chinese uses word segmentation). Shorten it; do not split it across deliveries.`)
   .describe(`Optional routing background or explicit human constraint, at most ${NOTE_WORDS} words. Never add implementation instructions or replace the original source.`)
+/** The shape a route item carries; each kind's field checks below refuse a bad value of one item without failing the call. */
+const ScheduleShapeSchema = z.object({
+  period: z.string(),
+  every: z.number().optional(),
+  at: z.string().optional(),
+  time_zone: z.string().optional(),
+}).strict()
+/** The schedule an explicit recurring request names; the Engine validates it again and computes the first boundary. */
+const ScheduleInputSchema = z.object({
+  period: z.enum(['minutely', 'hourly', 'daily', 'weekly']).describe('The unit the request names: minutely, hourly, daily or weekly.'),
+  every: z.number().int().positive().optional().describe('How many period units between runs; 1 when omitted, such as 15 for every 15 minutes, 2 for every 2 hours or 3 for every 3 days.'),
+  at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use a wall-clock HH:mm time, such as 09:00').optional()
+    .describe('Daily and weekly only: the wall-clock time, HH:mm. The accept local time when omitted. Refused for minutely and hourly.'),
+  time_zone: z.string().min(1).optional().describe('The IANA zone the request states, such as Asia/Shanghai; the runtime local zone when omitted. Never invent one.'),
+}).strict()
 export interface MainToolsHost {
   readonly context: Context
   readonly engine: Pick<EngineForMainSession, 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'> & EngineForPeople
@@ -54,6 +69,7 @@ const RouteItemSchema = z.object({
   acknowledgement: z.string().nullish().describe(`accept: one brief sentence of at most ${IM_WORDS} words naming the concrete change and intended result in the source language. It is posted as a reply to the original source on acceptance, so do not quote the source; quote an earlier proposal briefly only when the trigger merely confirms it and the sentence does not already state it. No generic I will handle it.`),
   note: z.string().nullish().describe(`accept and attach: ${RoutingNoteSchema.description ?? ''}`),
   reason: z.string().nullish().describe('ignore and stop: why, at most 500 characters; an ignore needs it.'),
+  schedule: ScheduleShapeSchema.nullish().describe('accept: {period: minutely|hourly|daily|weekly, every: count, at: HH:mm for daily/weekly, time_zone: IANA}. Only when the request names a recurrence; never on an inferred candidate.'),
 }).strict()
 type RouteItem = z.infer<typeof RouteItemSchema>
 type Kind = RouteItem['kind']
@@ -67,13 +83,14 @@ const FIELDS: Record<Field, { check: z.ZodType; reads: readonly Kind[]; needs: r
   acknowledgement: { check: AcknowledgementSchema, reads: ['accept'], needs: ['accept'] },
   note: { check: RoutingNoteSchema, reads: ['accept', 'attach'], needs: [] },
   reason: { check: z.string().max(500), reads: ['ignore', 'stop'], needs: ['ignore'] },
+  schedule: { check: ScheduleInputSchema, reads: ['accept'], needs: [] },
 }
 /** Why an item cannot run: a field its kind needs is missing, or one it reads breaks its limit. */
 function invalid(item: RouteItem): string | undefined {
   for (const [field, { check, reads, needs }] of Object.entries(FIELDS) as [Field, typeof FIELDS[Field]][]) {
     const value = item[field]
     if (!reads.includes(item.kind)) continue
-    if (value === undefined || value === null || value.trim() === '') {
+    if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
       if (needs.includes(item.kind)) return `${item.kind} needs ${field}`
       continue
     }
@@ -96,9 +113,14 @@ function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string
   switch (item.kind) {
     case 'accept': {
       const before = host.store.triggers.disposition(item.trigger_id)?.decisionId
+      const checked = item.schedule ? ScheduleInputSchema.safeParse(item.schedule) : undefined
+      const schedule = checked?.success ? { period: checked.data.period,
+        ...checked.data.every === undefined ? {} : { every: checked.data.every },
+        ...checked.data.at ? { at: checked.data.at } : {},
+        ...checked.data.time_zone ? { timeZone: checked.data.time_zone } : {} } : undefined
       const decision = host.engine.decide(item.trigger_id, { kind: 'accept', title: item.title!, scope: item.title!, reason: { code: 'explicitRouted' },
         acknowledgement: item.acknowledgement!, name: item.worktree_name!, ...note,
-        ...(item.execution_target ? { executionTarget: item.execution_target } : {}) })
+        ...(item.execution_target ? { executionTarget: item.execution_target } : {}), ...schedule ? { schedule } : {} })
       // A Decision that created no ticket is the item's refusal; one that existed before keeps what it was accepted with.
       if (decision.kind !== 'accept' || !decision.ticketId) return { refused: `Ticket was not created: ${reasonText(decision.reason)}` }
       if (decision.id === before) {
@@ -129,7 +151,7 @@ function route(host: MainToolsHost, item: RouteItem, decided: ReadonlyMap<string
 function routeTool(host: MainToolsHost): Tool {
   return tool({
     name: 'orchestrator_route',
-    description: 'Route candidates, one item each by the card\'s trigger_id, in one call: accept an explicit request as a new ticket, attach a trigger to an existing ticket, stop a ticket on a person\'s stop message, or ignore a candidate that needs no ticket or stop, as dispatch says. An accept is coding work when execution_target names a configured repository-capable Source instance; without it the ticket runs locally with no repository. Items run in order and each is answered on its own; a refused item leaves the others. An inferred candidate may be ignored here; accepting one goes through orchestrator_eval_decide.',
+    description: 'Route candidates, one item each by the card\'s trigger_id, in one call: accept an explicit request as a new ticket, attach a trigger to an existing ticket, stop a ticket on a person\'s stop message, or ignore a candidate that needs no ticket or stop, as dispatch says. An accept is coding work when execution_target names a configured repository-capable Source instance; without it the ticket runs locally with no repository. A request that names a recurrence adds schedule. Items run in order and each is answered on its own; a refused item leaves the others. An inferred candidate may be ignored here; accepting one goes through orchestrator_eval_decide.',
     schema: z.object({ decisions: z.array(RouteItemSchema).min(1).max(20) }).strict(),
     execute: async ({ decisions }) => {
       const decided = new Map<string, string>()

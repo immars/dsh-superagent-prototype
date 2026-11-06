@@ -1619,3 +1619,66 @@ describe('ignores from the card', () => {
     expect(() => h.engine.decide('5', { kind: 'accept', title: 'Fix', scope: 'small', reason: 'chat' })).toThrow(new UserError('notExplicit'))
   })
 })
+describe('periodic tasks', () => {
+  const schedule = { period: 'daily' as const, every: 3, at: '09:00', timeZone: 'UTC' }
+  it('records an explicit accept\'s schedule with its Mandate and computes the next boundary', () => {
+    const h = harness()
+    h.engine.receive(trigger('1')); h.pump()
+    const decision = h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Daily', scope: 'progress', reason: 'requested', schedule })
+    const ticket = h.repo.tickets.get(decision.ticketId!)!
+    expect(ticket.schedule).toMatchObject({ ...schedule, fromTriggerId: '1' })
+    expect(ticket.schedule!.nextAt > ticket.createdAt).toBe(true)
+    expect(h.repo.tickets.get(ticket.id)!.mandate).toEqual(decision.mandate)
+  })
+  it('refuses a schedule on an inferred candidate and an accept with no deliverable Channel', () => {
+    const h = harness()
+    accepted(h)
+    h.engine.receive(trigger('2', { actor: guest })); h.engine.reevaluate('2'); h.pump()
+    expect(h.requests.at(-1)).toMatchObject({ strength: 'inferred' })
+    expect(() => h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Daily', scope: 'progress', reason: 'requested', schedule }))
+      .toThrow(new UserError('notExplicit'))
+    h.engine.receive(trigger('3', { threads: [{ source: 'chat', id: 't3' }], channel: undefined })); h.pump()
+    expect(() => h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Daily', scope: 'progress', reason: 'requested', schedule }))
+      .toThrow(new UserError('scheduleNoChannel'))
+    // The refused accept left no ticket behind.
+    expect(h.repo.tickets.list().filter(ticket => ticket.schedule)).toHaveLength(0)
+  })
+  it('keeps a scheduled Ticket open after a ready report, while an ordinary ready report ends its Ticket', () => {
+    const h = harness()
+    h.engine.receive(trigger('1')); h.pump()
+    const decision = h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Daily', scope: 'progress', reason: 'requested', schedule })
+    h.settle()
+    h.engine.report(decision.ticketId!, { state: 'ready', summary: 'one run' })
+    expect(h.repo.tickets.get(decision.ticketId!)!.ended).toBeUndefined()
+    const ordinary = accepted(h, '2', 't2')
+    h.engine.report(ordinary.ticketId!, { state: 'ready', summary: 'done' })
+    expect(h.repo.tickets.get(ordinary.ticketId!)!.ended).toMatchObject({ outcome: 'completed' })
+  })
+  it('fires a due run once, advances nextAt in the same transaction, and holds while the Mandate fails or a person waits', () => {
+    const h = harness()
+    h.engine.receive(trigger('1')); h.pump()
+    const decision = h.decide(h.requests.at(-1)!, { kind: 'accept', title: 'Daily', scope: 'progress', reason: 'requested', schedule })
+    const id = decision.ticketId!
+    h.settle()
+    h.engine.report(id, { state: 'ready', summary: 'one run' })
+    h.tick(60 * 60 * 24 * 4)
+    expect(h.engine.fireScheduled(id)).toBe(true)
+    h.settle()
+    const fired = h.repo.tickets.get(id)!
+    expect(fired.inputs.filter(input => input.kind === 'scheduled-run')).toHaveLength(1)
+    expect(fired.schedule!.lastRunAt).toBeTruthy()
+    expect(fired.schedule!.nextAt > fired.schedule!.lastRunAt!).toBe(true)
+    // A second call at the same instant is not a second run.
+    expect(h.engine.fireScheduled(id)).toBe(false)
+    expect(h.repo.tickets.get(id)!.inputs.filter(input => input.kind === 'scheduled-run')).toHaveLength(1)
+    // A blocked worker holds the next run, and a Mandate the Policy no longer holds pauses the schedule.
+    h.engine.report(id, { state: 'blocked', summary: 'Need access' })
+    h.tick(60 * 60 * 24 * 4)
+    expect(h.engine.fireScheduled(id)).toBe(false)
+    h.engine.report(id, { state: 'ready', summary: 'Unblocked' })
+    h.setVersion('revoked')
+    h.tick(60 * 60 * 24 * 4)
+    expect(h.engine.fireScheduled(id)).toBe(false)
+    expect(h.repo.tickets.get(id)!.schedule!.paused).toBe('policy')
+  })
+})

@@ -222,3 +222,31 @@ it('sends one stop for a double click on Confirm', async () => {
   await act(async () => { confirm.click(); confirm.click() })
   expect(server.requests.filter(request => request.path === 'tickets/t1/stop')).toHaveLength(1)
 })
+
+it('lists periodic tasks under Scheduled with their interval, next run, requester, last result and stop action', async () => {
+  const schedule = { period: 'minutely' as const, every: 15, timeZone: 'Asia/Shanghai', nextAt: '2030-01-01T01:00:00.000Z' }
+  const requestedBy = { source: 'feishu', id: MEMBER, name: { zh: 'Alice', en: 'Alice' } }
+  const scheduled = ticketSummary({ title: '每 15 分钟汇报进度', schedule, requestedBy, summary: '上次没有新进展',
+    deliveryProblem: { kind: 'dropped', reason: 'channelGone', at: '2026-11-06T01:00:05.000Z' } }, { stage: 'scheduled' })
+  server.tickets.open = [scheduled]
+  server.ticketDetails.t1 = { ...server.ticketDetails.t1!, title: scheduled.title, schedule, requestedBy, summary: scheduled.summary, stage: 'scheduled' }
+  await mount()
+  await click(zh['tab.execution'])
+  await click(zh['ticketFilter.scheduled'])
+  expect(server.requests.some(request => request.path === 'tickets?state=scheduled&limit=20')).toBe(true)
+  expect(all('.dt-ticket-stage').map(stage => stage.textContent)).toEqual([expect.stringContaining(zh['stage.scheduled'])])
+  for (const expected of [zh['schedule.minutes'].replace('{count}', '15'), zh.nextRunLabel, zh.requesterLabel, 'Alice', '上次没有新进展',
+    zh.replyDropped]) expect(text()).toContain(expected)
+  await click('每 15 分钟汇报进度')
+  expect(document.querySelector('.dt-status-line .dt-stage')?.textContent).toContain(zh['stage.scheduled'])
+  const rows = () => all('.dt-kv > div').map(row => [row.querySelector('dt')?.textContent, row.querySelector('dd')?.textContent])
+  expect(rows()).toEqual(expect.arrayContaining([[zh.scheduleIntervalLabel, zh['schedule.minutes'].replace('{count}', '15')],
+    [zh.scheduleZoneLabel, 'Asia/Shanghai'], [zh.nextRunLabel, expect.stringMatching(/2030/)] ]))
+  await click(zh.stop)
+  await click(zh.confirm)
+  expect(server.requests.some(request => request.path === 'tickets/t1/stop' && request.method === 'POST')).toBe(true)
+  await remount(en)
+  expect(document.querySelector('.dt-status-line .dt-stage')?.textContent).toContain(en['stage.scheduled'])
+  expect(all('.dt-kv > div').map(row => [row.querySelector('dt')?.textContent, row.querySelector('dd')?.textContent]))
+    .toEqual(expect.arrayContaining([[en.scheduleIntervalLabel, en['schedule.minutes'].replace('{count}', '15')], [en.nextRunLabel, expect.stringMatching(/2030/)]]))
+})

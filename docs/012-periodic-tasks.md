@@ -1,6 +1,6 @@
 # 012 Periodic tasks
 
-**Status: proposal for review. This change contains documentation only. No runtime code changes until the design is accepted and implementation is scheduled.**
+**Status: accepted. This document is the design of record for native periodic tasks; [003 Execution](003-execution.md) states the stages the implementation keeps.**
 
 This document proposes native periodic tasks: a person asks for recurring work in an ordinary conversation, the main Session creates the task, and the agent performs it again on the requested schedule, delivering each result to the conversation that asked. It builds on [001 Domain model](001-domain.md), [002 Authorization](002-authorization.md), [003 Execution](003-execution.md), [004 Prompts](004-prompts.md) and [005 Panel](005-panel.md).
 
