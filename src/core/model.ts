@@ -268,6 +268,11 @@ export interface PolicyEffect {
   requester?: ActorRef
 }
 
+/**
+ * Where a Ticket's work executes: the repository-capable Source instance chosen when it was accepted, and the canonical
+ * repository it supplies. Execution detail only: it grants no scope and is not part of the Mandate.
+ */
+export interface ExecutionTarget { source: string; repository: string }
 export type TicketEndBy = 'executor' | 'human'
 /** How a ticket ended: with its result, with its pull request merged or closed unmerged, with nothing to do, or stopped by a person. */
 export type TicketOutcome = 'completed' | 'merged' | 'closed' | 'dropped' | 'stopped'
@@ -303,6 +308,16 @@ export interface Ticket {
   origin: { triggerId: string; triggerIds: string[] }
   /** What its Executor chose: its short name, directory and assignment text. */
   execution?: Execution
+  /**
+   * The repository-capable Source instance its work executes in, or absent for a local-only ticket. The main Session
+   * chooses it when it accepts the ticket; it is not inferred from the origin Source.
+   */
+  target?: ExecutionTarget
+  /**
+   * Whether its target was settled: set when the main Session accepts the ticket (possibly with no target), or once the
+   * Executor resolves one for an open ticket accepted before targets existed. It keeps that resolution one-time.
+   */
+  targetResolved?: true
   /** The latest failed delivery of an Input to its worker, until a delivery succeeds. */
   delivery?: { error: string; at: string }
 }

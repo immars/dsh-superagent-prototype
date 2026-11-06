@@ -130,7 +130,7 @@ async function acceptedTicket(trigger = feishu('1', '@bot 修一下回归')) {
   await receive(trigger)
   expect(relays(runtime.masterId).some(item => item.trigger_id === trigger.id)).toBe(true)
   const result = await route({ kind: 'accept', trigger_id: trigger.id, title: '修复回归',
-    worktree_name: worktreeName, acknowledgement: '收到，修复回归。' })
+    worktree_name: worktreeName, execution_target: 'github', acknowledgement: '收到，修复回归。' })
   const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
   return { trigger, ticket, sessionId: `worker-${ticket.id}` }
 }
@@ -238,6 +238,104 @@ it('relays an explicit member mention as a candidate and creates the ticket, ack
     thread: `feishu:${CHAT}:om_1`, text: trigger.text }) })
   expect(first.trigger).not.toHaveProperty('read')
   expect(await route({ kind: 'accept', trigger_id: trigger.id, title: 'again', worktree_name: worktreeName, acknowledgement: 'x' })).toMatchObject({ ticket: { ticket_id: ticket.id } })
+})
+
+it('accepts a chosen GitHub target instance and runs the worker in its repository instead of the default', async () => {
+  const settings = runtime.store.settings()
+  runtime.store.saveSettings({ ...settings, sources: { ...settings.sources,
+    'github-infra': { kind: 'github', enabled: true, config: { repository: 'acme/infra', cli: AGENT() } } } })
+  const trigger = feishu('60', '@bot 修一下 infra 的回归')
+  await receive(trigger)
+  const result = await route({ kind: 'accept', trigger_id: trigger.id, title: '修复 infra 回归', worktree_name: 'fix-infra',
+    execution_target: 'github-infra', acknowledgement: '收到，修复 infra 回归。' })
+  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  expect(result).toMatchObject({ ticket: { ticket_id: ticket.id, target: { source: 'github-infra', repository: 'acme/infra' } },
+    execution_target: { source: 'github-infra', repository: 'acme/infra' } })
+  expect(ticket).toMatchObject({ target: { source: 'github-infra', repository: 'acme/infra' }, targetResolved: true })
+  const environment = Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(environment).toMatchObject({ DSH_SUPERAGENT_FEISHU_CHAT: CHAT, DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/infra' })
+  expect(environment.DSH_SUPERAGENT_GITHUB_REPOSITORY).not.toBe('acme/widgets')
+  expect(ticketDetail(viewsOf(runtime), ticket.id)).toMatchObject({ target: { source: 'github-infra', repository: 'acme/infra' } })
+  // Its worker's pull-request tool reads and binds the target repository and instance, not the deployment default.
+  vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' }
+    : { state: 'open', html_url: 'https://github.com/acme/infra/pull/42', user: { login: 'agent-bot' },
+      head: { sha: 'abc', ref: `agent/${ticket.execution!.name}`, repo: { full_name: 'acme/infra' } } })
+  await runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 })
+  expect(vi.mocked(Commands.prototype.gh).mock.calls.map(([args]) => args)).toContainEqual(['api', 'repos/acme/infra/pulls/42'])
+  expect(runtime.store.tickets.get(ticket.id)!.follows).toEqual([{ thread: 'github-infra:42', own: true }])
+})
+
+it('refuses an execution target that is not a configured repository candidate', async () => {
+  const settings = runtime.store.settings()
+  runtime.store.saveSettings({ ...settings, sources: { ...settings.sources,
+    'github-empty': { kind: 'github', enabled: true, config: { repository: '', cli: AGENT() } } } })
+  const trigger = feishu('61', '@bot 修一下')
+  await receive(trigger)
+  const item = { kind: 'accept', trigger_id: trigger.id, title: '修复回归', worktree_name: 'fix-invalid', acknowledgement: '收到。' }
+  // A non-repository Source, an unknown instance, and a repository-capable kind with no configured repository are not candidates.
+  await expect(route({ ...item, execution_target: 'feishu' })).rejects.toThrow(/execution target feishu/)
+  await expect(route({ ...item, execution_target: 'github-missing' })).rejects.toThrow(/execution target github-missing/)
+  await expect(route({ ...item, execution_target: 'github-empty' })).rejects.toThrow(/execution target github-empty/)
+  expect(runtime.store.tickets.list()).toEqual([])
+})
+
+it('runs a ticket with no target locally, with empty repository variables and no pull-request tools', async () => {
+  const trigger = feishu('62', '@bot 把这段文字改得自然一点')
+  await receive(trigger)
+  const result = await route({ kind: 'accept', trigger_id: trigger.id, title: '改文案', worktree_name: 'copy-edit', acknowledgement: '收到，改文案。' })
+  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  expect(result).not.toHaveProperty('execution_target')
+  expect(ticket).toMatchObject({ targetResolved: true })
+  expect(ticket.target).toBeUndefined()
+  expect(ticket).not.toHaveProperty('target')
+  const environment = Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(environment).toMatchObject({ DSH_SUPERAGENT_FEISHU_CHAT: CHAT, DSH_SUPERAGENT_GITHUB_REPOSITORY: '', DSH_SUPERAGENT_GITHUB_ACCOUNT: '' })
+  expect(ticket.assignments.at(-1)).toMatchObject({ state: 'running' })
+  const sessionId = `worker-${ticket.id}`
+  await expect(runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'pr open', pr_number: 42 }))
+    .rejects.toThrow(/no repository target/)
+  await expect(runTool(sessionId, 'orchestrator_read', { resource: 'github/pulls/42' })).rejects.toThrow(/no repository target/)
+  // A later launch sees the recorded choice: a local-only ticket does not gain a target from its origin.
+  runtime.executor.resume()
+  await runtime.idle()
+  const restarted = runtime.store.tickets.get(ticket.id)!
+  expect(restarted).toMatchObject({ targetResolved: true })
+  expect(restarted.target).toBeUndefined()
+})
+
+it('resolves a pre-upgrade open ticket\'s target once from its origin GitHub instance before launch', async () => {
+  const settings = runtime.store.settings()
+  runtime.store.saveSettings({ ...settings, sources: { ...settings.sources,
+    'github-infra': { kind: 'github', enabled: true, config: { repository: 'acme/infra', cli: AGENT() } } },
+  policy: { ...settings.policy, sources: { ...settings.policy.sources, 'github-infra': { allowed: [{ id: 'alice' }] } } } })
+  const mention = commentTrigger({ id: 61, body: '@agent-bot please fix the infra regression', user: { login: 'alice' },
+    html_url: 'https://github.com/acme/infra/issues/61', created_at: '2026-09-09T00:00:00Z' }, { number: 61, isPr: false }, 'conversation', 'agent-bot', 'github-infra')
+  await receive(mention)
+  const result = await route({ kind: 'accept', trigger_id: mention.id, title: 'Fix infra regression', worktree_name: 'fix-infra-legacy', acknowledgement: 'On it.' })
+  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  // The ticket predates execution targets: its first launch resolves the origin instance and records it.
+  const legacy = { ...ticket, assignments: [...ticket.assignments.map(assignment => ({ ...assignment, state: 'ended' as const,
+    endedAt: new Date().toISOString() })), { id: 'legacy-launch', state: 'pending' as const, createdAt: new Date().toISOString() }] }
+  delete legacy.target; delete legacy.targetResolved
+  runtime.store.tickets.save(legacy)
+  runtime.executor.resume()
+  await runtime.idle()
+  const resolved = runtime.store.tickets.get(ticket.id)!
+  expect(resolved).toMatchObject({ target: { source: 'github-infra', repository: 'acme/infra' }, targetResolved: true })
+  expect(Object.fromEntries(runtime.ticketEnvironment(resolved).map(variable => [variable.key, variable.value])))
+    .toMatchObject({ DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/infra' })
+})
+
+it('falls back to the previous default GitHub repository for a pre-upgrade ticket from another Source', async () => {
+  const { ticket } = await acceptedTicket(feishu('63', '@bot 升级前接的工单'))
+  const current = runtime.store.tickets.get(ticket.id)!
+  const legacy = { ...current, assignments: [...current.assignments.map(assignment => ({ ...assignment, state: 'ended' as const,
+    endedAt: new Date().toISOString() })), { id: 'legacy-default', state: 'pending' as const, createdAt: new Date().toISOString() }] }
+  delete legacy.target; delete legacy.targetResolved
+  runtime.store.tickets.save(legacy)
+  runtime.executor.resume()
+  await runtime.idle()
+  expect(runtime.store.tickets.get(ticket.id)).toMatchObject({ target: { source: 'github', repository: 'acme/widgets' }, targetResolved: true })
 })
 
 it('fans a person\'s later thread message out to the live worker as context and tells the orchestrator, without an Eval', async () => {
@@ -461,7 +559,7 @@ it('treats GitHub comments through the same gate: mentions by members are explic
   const mention = commentTrigger({ id: 2, body: '@agent-bot please fix', user: { login: 'alice' }, html_url: 'https://github.com/acme/widgets/pull/7#issuecomment-2', created_at: '2026-09-09T00:01:00Z' }, { number: 7, isPr: true }, 'conversation', 'agent-bot')
   await receive(mention)
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'candidate', strength: 'explicit', trigger_id: mention.id })
-  const result = await route({ kind: 'accept', trigger_id: mention.id, title: 'Fix PR 7', worktree_name: 'fix-pr', acknowledgement: 'On it: fixing the review finding.' })
+  const result = await route({ kind: 'accept', trigger_id: mention.id, title: 'Fix PR 7', worktree_name: 'fix-pr', execution_target: 'github', acknowledgement: 'On it: fixing the review finding.' })
   const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
   expect(ticket.channels).toEqual([expect.objectContaining({ source: 'github', address: expect.objectContaining({ number: '7' }) })])
   // The PR's head is a variable of the ticket's execution environment; a prepare command may fetch it.

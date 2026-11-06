@@ -1,12 +1,14 @@
 /** Registry of installed Source kinds, their configured instances, and the Engine's SourceScope implementation. */
-import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
+import type { ChannelRef, ExecutionTarget, OutboundMessage, ScopeResult, SourceScope, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
 import type { ChannelLink, ChannelLinks, RepositoryTarget, SourceInstance, SourceKind, TriggerContext, VariableSpec } from './kind.ts'
 
-/**
- * Manages registered SourceKind plugins, validates their instance and policy configurations, and implements SourceScope for the Engine.
+/** What an execution environment asks of the registry: the Ticket target, its origin Trigger, and whether a Ticket exists at all. */
+export interface EnvironmentSelection { target?: ExecutionTarget; trigger?: Trigger; ticket?: boolean }
+
+/** Manages registered SourceKind plugins, validates their instance and policy configurations, and implements SourceScope for the Engine.
  * Claims each registered kind's health entries on HealthBoard and mediates access to source channels, links, environment variables, and thread context readers for Runtime, Settings, Outbox, and MasterAssessor.
  */
 export class SourceRegistry implements SourceScope {
@@ -109,11 +111,40 @@ export class SourceRegistry implements SourceScope {
   declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
     return [...this.kinds.values()].sort((a, b) => a.kind.localeCompare(b.kind)).flatMap(kind => kind.environment ? [{ kind: kind.kind, variables: kind.environment.variables }] : [])
   }
-  environments(settings = this.settings()) {
-    return this.instances(settings).flatMap(instance => {
-      const kind = this.kindOf(instance.id, settings)
-      return kind?.environment && instance.enabled ? [{ kind, environment: kind.environment, config: instance.config, instance }] : []
+  /**
+   * One entry per installed kind with environment variables, showing the instance selected for this execution: the
+   * Ticket's target instance when the kind matches, else the origin Trigger's instance when it is of this kind, else the
+   * default instance for the main Session. `enabled` says whether any instance of the kind is on, for the settings
+   * panel's variable list.
+   */
+  environments(selection: EnvironmentSelection = {}, settings = this.settings()) {
+    return [...this.kinds.values()].filter(kind => kind.environment).sort((a, b) => a.kind.localeCompare(b.kind)).map(kind => {
+      const enabled = this.instances(settings).some(instance => instance.installed && instance.enabled && this.kindOf(instance.id, settings)?.kind === kind.kind)
+      return { kind, environment: kind.environment!, ...this.environmentInstance(kind, selection, settings), enabled }
     })
+  }
+  /**
+   * The instance whose values a kind's environment uses: the target instance of this kind, the origin instance of this
+   * kind for a non-repository kind, or the default instance for the main Session. A local-only Ticket's repository-capable
+   * kinds use no instance, so their variables stay empty.
+   */
+  private environmentInstance(kind: SourceKind, selection: EnvironmentSelection, settings: Settings):
+    { config: Record<string, unknown>; instance?: SourceInstance } {
+    const { target, trigger, ticket } = selection
+    if (target && this.kindOf(target.source, settings)?.kind === kind.kind) {
+      const instance = this.instance(target.source, settings)
+      if (instance) return { config: instance.config, instance }
+    }
+    if (!ticket) {
+      const instance = this.instance(kind.kind, settings)
+      return instance ? { config: instance.config, instance } : { config: kind.schema.parse({}) }
+    }
+    if (kind.repository) return { config: kind.schema.parse({}) }
+    if (trigger && this.kindOf(trigger.source, settings)?.kind === kind.kind) {
+      const instance = this.instance(trigger.source, settings)
+      if (instance) return { config: instance.config, instance }
+    }
+    return { config: kind.schema.parse({}) }
   }
   /**
    * Sends a message idempotently through its Channel's kind; returns `'waiting'` while the kind is not installed, or

@@ -305,13 +305,18 @@ export class Evals extends EnginePart {
   /** Record an accept with the Mandate the Eval gives, and have Tickets create its ticket. */
   private accept(thread: Thread, evaluation: Evaluation, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Decision {
     const at = this.now()
+    // A target must be exactly one of the repository candidates; it is never inferred from the origin Source.
+    const target = outcome.executionTarget === undefined ? undefined : this.options.executionTarget?.(outcome.executionTarget)
+    if (outcome.executionTarget !== undefined && !target) {
+      throw new UserError('notAdmissible', { reason: `the execution target ${outcome.executionTarget} is not an installed repository-capable Source instance with a configured repository` })
+    }
     const basis = { ...evaluation.basis, ...(outcome.rules ? { rules: outcome.rules } : {}) }
     const { strength, policyVersion, actor } = evaluation
     const mandate: Mandate = { strength, policyVersion, basis, actor, scope: outcome.scope }
     const ticketId = key('ticket', evaluation.id)
     const audit = outcome.audit ? { audit: outcome.audit } : {}
     const decision = this.finish(thread, evaluation, { kind: 'accept', reason: reasonOf(outcome.reason), ...audit, mandate, ticketId })
-    this.tickets.create(ticketId, decision.id, mandate, evaluation, outcome, at)
+    this.tickets.create(ticketId, decision.id, mandate, evaluation, outcome, at, target)
     return decision
   }
   /** Record an Eval's Decision; the Thread's own Eval ends with it, while a gate-only one leaves the Thread's Eval going. */

@@ -5,7 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mkdir, rmdir, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { key, latestAssignment, latestReport, liveTicket, runningAssignment, threadKey, waitsForPerson } from '../core/index.ts'
-import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
+import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, ExecutionTarget, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
 import type { Machine } from '../deployment.ts'
 import { runAsWorker, verifyDirectory } from '../infra/environment.ts'
@@ -76,6 +76,8 @@ export interface ExecutorHost {
   paused(): boolean
   /** Execution environment variables for `ticket`, passed to its workspace prepare command. */
   environment(ticket: Ticket): Variable[]
+  /** Resolves a pre-upgrade open Ticket's execution target once, from its origin instance or the default repository. */
+  resolveTarget(ticket: Ticket): ExecutionTarget | undefined
   sourceLink(trigger: Trigger, signal?: AbortSignal): Promise<{ source_url?: string; source_url_read?: string }>
   /** Stored Trigger of the message `trigger` replies to, when it replies to one. */
   repliedTo(trigger: Trigger): Trigger | undefined
@@ -237,6 +239,23 @@ export class DshExecutor implements Executor {
   /** Populates a newly accepted ticket's `execution` attributes (worktree name, workspace directory, and assignment text). */
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Ticket {
     return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir) }
+  }
+  /**
+   * Records a pre-upgrade Ticket's execution target once, before its first launch: `targetResolved` keeps a local-only
+   * resolution from being re-inferred at every restart. New Tickets record their choice at accept.
+   */
+  private recordTarget(ticket: Ticket): Ticket {
+    if (ticket.targetResolved) return ticket
+    const target = this.host.resolveTarget(ticket)
+    return this.host.store.atomic(() => {
+      const stored = this.host.store.tickets.get(ticket.id) ?? ticket
+      if (stored.targetResolved) return stored
+      stored.targetResolved = true
+      // A recorded target is immutable; resolution only fills a pre-upgrade ticket's empty one.
+      if (target && !stored.target) stored.target = target
+      this.host.store.tickets.save(stored)
+      return stored
+    })
   }
   /**
    * Runs the configured `executor.prepare` command for a new ticket workspace in its parent directory with the ticket's
@@ -431,6 +450,11 @@ export class DshExecutor implements Executor {
     const source = sourceTrigger(this.host, ticket)
     const workspace = ticket.execution?.directory ?? ''
     if (!current()) return
+    // A Ticket accepted before execution targets existed resolves one once, before its prepare command sees the environment.
+    if (!ticket.targetResolved) {
+      ticket = this.recordTarget(ticket)
+      if (!current()) return
+    }
     // Prepare the workspace directory once; an existing directory counts as already prepared, including worktrees created before `prepare` commands existed.
     if (!await stat(workspace).then(() => true, () => false)) {
       await this.prepareDirectory(ticket)

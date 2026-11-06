@@ -1,6 +1,6 @@
 /** Execution environment variables exposed to prepare commands and documented in worker Session instructions; never contains credentials. */
 import { join } from 'node:path'
-import type { Ticket, Trigger } from '../core/index.ts'
+import type { ExecutionTarget, Ticket, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Settings } from '../policy.ts'
 import type { Localized, VariableSpec } from '../sources/kind.ts'
@@ -17,28 +17,35 @@ export interface Variable { key: string; value: string; description: Localized; 
 
 export const executionRoot = (settings: Settings, stateDir: string): string => settings.executor.directory || join(stateDir, 'work')
 
-/** Lists all declared variables grouped by owner; `enabled` is false for Sources that are currently switched off. */
+/** Lists all declared variables grouped by owner; `enabled` is false for a kind with no enabled instance. */
 export function declaredVariables(sources: SourceRegistry, settings?: Settings): { owner: string; enabled: boolean; variables: readonly VariableSpec[] }[] {
-  const on = new Set(sources.environments(settings).map(item => item.kind.kind))
   return [{ owner: 'executor', enabled: true, variables: EXECUTOR_VARIABLES },
-    ...sources.declarations().map(({ kind, variables }) => ({ owner: kind, enabled: on.has(kind), variables }))]
+    ...sources.environments({}, settings).map(({ kind, enabled, environment }) => ({ owner: kind.kind, enabled, variables: environment.variables }))]
 }
 
-export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
+/** The ticket-specific facts an execution environment needs: its directory, and the repository target it works in, if any. */
+export interface TicketEnvironment { id: string; name: string; directory: string; target?: ExecutionTarget }
+
+export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: TicketEnvironment; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? { DSH_SUPERAGENT_DIR: ticket.directory, DSH_SUPERAGENT_NAME: ticket.name, DSH_SUPERAGENT_TICKET: ticket.id } : {} }
   const result: Variable[] = EXECUTOR_VARIABLES.filter(spec => !spec.ticket || ticket).map(spec => ({ key: spec.key, value: executor[spec.key] ?? '', description: spec.description, owner: 'executor' }))
-  for (const { kind, environment, config } of sources.environments(settings)) {
-    const values = environment.values({ deployment, config, ...trigger ? { trigger } : {} })
-    for (const spec of environment.variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind.kind })
+  const selected = new Map(sources.environments({ ...(ticket?.target ? { target: ticket.target } : {}), ...(trigger ? { trigger } : {}), ...(ticket ? { ticket: true } : {}) }, settings)
+    .map(item => [item.kind.kind, item]))
+  for (const { kind, variables } of sources.declarations()) {
+    const entry = selected.get(kind)
+    const values = entry?.instance ? entry.environment.values({ deployment, config: entry.config, instance: entry.instance,
+      ...(ticket?.target ? { target: ticket.target } : {}), ...(trigger ? { trigger } : {}) }) : {}
+    for (const spec of variables) result.push({ key: spec.key, value: values[spec.key] ?? '', description: spec.description, owner: kind })
   }
   return result
 }
 
-/** Combines a ticket's fixed directory, name, and origin trigger with the deployment's current settings. */
+/** Combines a ticket's fixed directory, name, target, and origin trigger with the deployment's current settings. */
 export function ticketEnvironment(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket: Ticket; trigger?: Trigger }) {
   const { ticket, trigger, ...rest } = input
-  const values = { id: ticket.id, name: ticket.execution?.name ?? '', directory: ticket.execution?.directory ?? '' }
+  const values = { id: ticket.id, name: ticket.execution?.name ?? '', directory: ticket.execution?.directory ?? '',
+    ...(ticket.target ? { target: ticket.target } : {}) }
   return environmentOf({ ...rest, ticket: values, ...trigger ? { trigger } : {} })
 }
 export function environmentLines(variables: Variable[]): string {

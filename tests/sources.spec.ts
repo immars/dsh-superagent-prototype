@@ -504,6 +504,27 @@ describe('github source', () => {
     expect(h.store.tickets.get('t4')).toMatchObject({ ended: { outcome: 'merged' } })
     h.store.close()
   })
+  it('binds a PR through the ticket\'s target instance and repository, and links its terminal notice there', async () => {
+    const h = host()
+    h.store.tickets.save({ ...openTicket('t7'), target: { source: 'github-infra', repository: 'acme/infra' },
+      execution: execution('fix-7'), channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_1' } }] })
+    // The Target's Source context, whose GitHub calls are restricted to its repository rather than the deployment default.
+    const target = { ...h, instance: { id: 'github-infra', kind: 'github' }, commands: h.commands.withRepository('acme/infra') }
+    const pr: Pull = { ...openPull(12), user: { login: 'agent-bot' }, html_url: 'https://github.com/acme/infra/pull/12',
+      head: { sha: 'abc', ref: 'agent/fix-7', repo: { full_name: 'acme/infra' } } }
+    expect(claimPull(target, 't7', pr)).toBeUndefined()
+    expect(pullOf(h.store.tickets.get('t7')!)).toBe(12)
+    expect(h.store.threads.get('github-infra:12')?.subscriptions).toEqual(['t7'])
+    // A PR in the deployment's default repository is not a PR of this ticket's target repository.
+    expect(claimPull(target, 't7', { ...pr, number: 13, html_url: 'https://github.com/acme/widgets/pull/13',
+      head: { ...pr.head, repo: { full_name: 'acme/widgets' } } })).toContain('does not belong to this ticket')
+    // Its terminal notice links the target repository, and skips only GitHub-kind channels.
+    h.store.tickets.save({ ...h.store.tickets.get('t7')!, ended: { at: '2026-09-02T00:00:00Z', by: 'executor', outcome: 'merged' },
+      follows: [{ thread: 'github-infra:12', own: true, closed: { at: '2026-09-02T00:00:00Z', outcome: 'merged' } }] })
+    expect(pullEndNotices(h.store.tickets.get('t7')!, '修复标题', 'acme/infra'))
+      .toEqual([expect.objectContaining({ kind: 'notice', text: expect.stringContaining('https://github.com/acme/infra/pull/12') })])
+    h.store.close()
+  })
   it('writes the terminal notice in English for a request without Han characters', async () => {
     const h = host()
     const request = feishuTrigger({ message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot fix the title', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
