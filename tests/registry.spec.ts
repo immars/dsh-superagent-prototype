@@ -53,6 +53,14 @@ describe('Source registry', () => {
     // The default instance remains virtual and is still listed first.
     expect(sources.instance('feishu')).toMatchObject({ id: 'feishu', kind: 'feishu', enabled: true })
   })
+  it('lists configured repository-capable instances as execution targets', () => {
+    const settings = SettingsSchema.parse({ sources: { 'github-infra': { kind: 'github', enabled: true, config: { repository: 'acme/infra', cli: '/opt/gh' } } } })
+    const sources = new SourceRegistry(() => settings)
+    sources.register(githubKind)
+    expect(sources.repositories()).toEqual([
+      { instance: 'github-infra', repository: 'acme/infra', url: 'https://github.com/acme/infra' },
+    ])
+  })
   it('validates submitted instances with the kind schema and refuses kinds that are not installed', () => {
     const sources = new SourceRegistry(() => SettingsSchema.parse({}))
     sources.register(probe)

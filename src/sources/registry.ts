@@ -3,7 +3,7 @@ import type { ChannelRef, OutboundMessage, ScopeResult, SourceScope, Trigger } f
 import type { Commands } from '../infra/commands.ts'
 import { HealthBoard, type HealthEntry } from '../infra/health.ts'
 import { AdmissionTableSchema, type Settings } from '../policy.ts'
-import type { ChannelLink, ChannelLinks, SourceInstance, SourceKind, TriggerContext, VariableSpec } from './kind.ts'
+import type { ChannelLink, ChannelLinks, RepositoryTarget, SourceInstance, SourceKind, TriggerContext, VariableSpec } from './kind.ts'
 
 /**
  * Manages registered SourceKind plugins, validates their instance and policy configurations, and implements SourceScope for the Engine.
@@ -97,6 +97,13 @@ export class SourceRegistry implements SourceScope {
     if (!kind) return false
     const instance = this.instance(channel.source, settings)
     return !!instance?.enabled && (kind.channel?.allowed?.(channel.address, instance.config) ?? true)
+  }
+  /** Every configured, non-removed repository-capable instance, in instance order; used to choose a Ticket's execution target. */
+  repositories(settings = this.settings()): RepositoryTarget[] {
+    return this.instances(settings).flatMap(instance => {
+      const target = this.kindOf(instance.id, settings)?.repository?.(instance)
+      return target ? [target] : []
+    })
   }
   /** Environment variable declarations for every installed kind, whether enabled or disabled. */
   declarations(): { kind: string; variables: readonly VariableSpec[] }[] {
