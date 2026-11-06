@@ -183,6 +183,19 @@ describe('gitlab source settings', () => {
     expect(gitlabKind.environment!.values({ deployment: testDeployment(), config: CONFIG,
       instance: { id: 'gitlab-ops', kind: 'gitlab', enabled: true, config: CONFIG }, trigger: extra }).DSH_SUPERAGENT_GITLAB_KIND).toBe('mr')
   })
+  it('offers the project as an execution target and takes the target project for the environment', () => {
+    const instance = { id: 'gitlab', kind: 'gitlab', enabled: true, config: CONFIG }
+    expect(gitlabKind.repository!(instance)).toEqual({ instance: 'gitlab', repository: PROD,
+      url: `https://gitlab.example.com/${PROD}` })
+    expect(gitlabKind.repository!({ ...instance, id: 'gitlab-ops' })).toMatchObject({ instance: 'gitlab-ops', repository: PROD })
+    // An instance without a project is not a candidate.
+    expect(gitlabKind.repository!({ ...instance, config: GitlabConfigSchema.parse({ ...CONFIG, project: '' }) })).toBeUndefined()
+    // The recorded target repository wins over the instance's current project; the origin item still comes from the Trigger.
+    const target = { source: 'gitlab', repository: 'group/other' }
+    expect(gitlabKind.environment!.values({ deployment: testDeployment(), config: CONFIG, instance, target,
+      trigger: mergeRequestTrigger(merge(), CONFIG) })).toMatchObject({ DSH_SUPERAGENT_GITLAB_SITE: 'https://gitlab.example.com',
+      DSH_SUPERAGENT_GITLAB_PROJECT: 'group/other', DSH_SUPERAGENT_GITLAB_KIND: 'mr', DSH_SUPERAGENT_GITLAB_NUMBER: '7' })
+  })
 })
 
 describe('gitlab polling', () => {

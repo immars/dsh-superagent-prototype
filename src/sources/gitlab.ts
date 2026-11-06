@@ -104,6 +104,13 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
     link: gitlabLink,
   },
   threadContext: gitlabThreadContext,
+  // A configured project is a Ticket execution target: the main Session may choose this instance for coding work.
+  repository: instance => {
+    const project = String(instance.config.project ?? '')
+    if (!project) return undefined
+    const site = String(instance.config.site ?? '')
+    return { instance: instance.id, repository: project, ...(site ? { url: `${site}/${project}` } : {}) }
+  },
   // A project page names its work item; `#12` and `12` may name an issue or a merge request because GitLab numbers them apart.
   find(query, instance) {
     const id = instance?.id ?? SOURCE
@@ -153,12 +160,14 @@ export const gitlabKind: SourceKind<GitlabConfig> = {
       { key: 'DSH_SUPERAGENT_GITLAB_URL', description: { zh: '接下工单的 Issue 或合并请求的页面地址；不是来自 GitLab 时为空',
         en: 'The page of the issue or merge request that started the ticket; empty when it did not start on GitLab' } },
     ],
-    values: ({ config, instance, trigger }) => {
+    values: ({ config, instance, target, trigger }) => {
       const fromGitlab = trigger?.source === instance.id ? trigger : undefined
       const meta = fromGitlab?.meta ?? {}
       const ref = fromGitlab && Number.isInteger(Number(meta.iid)) && Number(meta.iid) > 0
         ? { kind: meta.workKind === 'mr' ? 'mr' as const : 'issue' as const, iid: Number(meta.iid) } : undefined
-      return { DSH_SUPERAGENT_GITLAB_SITE: config.site, DSH_SUPERAGENT_GITLAB_PROJECT: config.project,
+      // The Ticket target is authoritative: the instance may have been reconfigured after the target was recorded.
+      const project = target?.source === instance.id ? target.repository : config.project
+      return { DSH_SUPERAGENT_GITLAB_SITE: config.site, DSH_SUPERAGENT_GITLAB_PROJECT: project,
         DSH_SUPERAGENT_GITLAB_KIND: ref?.kind ?? '', DSH_SUPERAGENT_GITLAB_NUMBER: ref ? String(ref.iid) : '',
         DSH_SUPERAGENT_GITLAB_URL: ref ? gitlabWebUrl(config, ref) : '' }
     },

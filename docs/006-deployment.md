@@ -146,14 +146,21 @@ Setup must succeed before polling or work starts. Overview lists missing require
 
 1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages. For GitLab, set the site, project, access token and agent account, then choose whether to receive every new issue, merge request and note or only those that mention the agent.
 2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts, Feishu users, JIRA users and GitLab users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
-3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of the repository:
+3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of its execution target:
 
    ```sh
-   git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
-   git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
+   if [ -n "$DSH_SUPERAGENT_GITHUB_REPOSITORY" ]; then
+     git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
+     git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
+   elif [ -n "$DSH_SUPERAGENT_GITLAB_PROJECT" ]; then
+     git clone --no-tags "$DSH_SUPERAGENT_GITLAB_SITE/$DSH_SUPERAGENT_GITLAB_PROJECT.git" "$DSH_SUPERAGENT_DIR" &&
+     git -C "$DSH_SUPERAGENT_DIR" switch -c "agent/$DSH_SUPERAGENT_NAME"
+   else
+     mkdir -p "$DSH_SUPERAGENT_DIR"
+   fi
    ```
 
-   List personal CLIs, such as one signed in to your own account, as blocked commands.
+   The last branch handles a Ticket with no execution target, such as a non-coding request: its repository variables are empty. The GitLab branch applies when the Ticket targets a GitLab project and uses the credential configured for that site. List personal CLIs, such as one signed in to your own account, as blocked commands.
 4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
 
 ### Management API
