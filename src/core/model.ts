@@ -1,5 +1,6 @@
 /** Domain model of a proactive agent: the concepts and their invariants, independent of any source, policy, or executor. */
 import type { Reason } from './reasons.ts'
+import type { Schedule } from './schedule.ts'
 
 /** Actor identity in the source's own vocabulary; Policy decides which actors may originate work on that Source. */
 export interface ActorRef { source: string; id: string }
@@ -252,6 +253,8 @@ export type TicketInput =
   | { id: string; kind: 'reopen'; decisionId: string; at: string }
   /** A human's message on one of its Threads resumed the ended ticket under its unchanged Mandate. */
   | { id: string; kind: 'resumed'; triggerId: string; at: string }
+  /** One run of a periodic task, fired by the clock at `scheduledFor`; the id is derived from that instant. */
+  | { id: string; kind: 'scheduled-run'; scheduledFor: string; at: string }
   | { id: string; kind: 'text'; text: string; at: string }
   /** A fact the main Session gave the ticket from other work: context, which asks for nothing and grants nothing. */
   | { id: string; kind: 'note'; text: string; at: string }
@@ -320,6 +323,11 @@ export interface Ticket {
   targetResolved?: true
   /** The latest failed delivery of an Input to its worker, until a delivery succeeds. */
   delivery?: { error: string; at: string }
+  /**
+   * A periodic task's schedule: additive, so an existing Ticket has none and behaves as before. The clock turns a due
+   * `nextAt` into a `scheduled-run` Input and advances it in one transaction; a `ready` report does not end the Ticket.
+   */
+  schedule?: Schedule
 }
 /**
  * A Thread a ticket follows, by its key: `own` when the ticket opened it, such as its own pull request, and when and how it

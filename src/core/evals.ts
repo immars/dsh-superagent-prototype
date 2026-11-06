@@ -152,6 +152,8 @@ export class Evals extends EnginePart {
     if (outcome.kind === 'accept' && evaluation.strength !== 'explicit' && !this.policy().admitsInferred(outcome.rules ?? [])) {
       throw new UserError('notExplicit')
     }
+    // A schedule repeats the explicit request; only that accept may create one, never an inferred proactive candidate.
+    if (outcome.kind === 'accept' && outcome.schedule && evaluation.strength !== 'explicit') throw new UserError('notExplicit')
     return this.decideEval(thread, evaluation, outcome)
   }
   /**

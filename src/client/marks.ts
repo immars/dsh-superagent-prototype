@@ -1,14 +1,19 @@
 /** Pure mappers from domain states (Tickets, Threads, Sources, Decisions) to UI status indicators. */
 import type { DecisionRow, SourceStatusRow, ThreadRow, TicketStage, TicketSummary } from './api.ts'
 import type { DshSuperagentKey } from './locales.ts'
-import { valueLabel, type T } from './text.ts'
+import { valueLabel, when, type T } from './text.ts'
 import type { DotState, IconName, TagTone } from './controls.tsx'
 
 export interface Mark { label: string; tone: TagTone; dot: DotState; icon: IconName }
 
-export function ticketMark(t: T, ticket: TicketStage & Pick<TicketSummary, 'ended'>): Mark {
+export function ticketMark(t: T, ticket: TicketStage & Pick<TicketSummary, 'ended' | 'schedule'>): Mark {
   switch (ticket.stage) {
     case 'ended': return { label: valueLabel(t, 'outcome', ticket.ended?.outcome), tone: 'neutral', dot: 'idle', icon: 'stop' }
+    case 'scheduled': {
+      const out = ticket.schedule?.paused === 'policy'
+      return { label: out ? t('scheduledPaused') : t('scheduleNext', { time: when(ticket.schedule?.nextAt, t('lang')) }),
+        tone: out ? 'warning' : 'info', dot: out ? 'warning' : 'done', icon: 'clock' }
+    }
     case 'person': {
       const action = ticket.action
       const icon: IconName = action === 'review' ? 'review' : action === 'failed' ? 'alert' : action === 'blocked' ? 'blocked'

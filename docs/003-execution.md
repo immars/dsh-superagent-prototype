@@ -10,13 +10,16 @@ Each open Ticket has one stage, determined by what it is waiting for. Read the t
 | --- | --- | --- |
 | person / delivery | Delivering an Input to the Executor Session failed; it is retried after 2 seconds, then after a delay that doubles up to a minute, and a success, a new Assignment or the Ticket's end clears it | Input undelivered |
 | person / answer | It has an Attention | Awaiting answer |
-| person / review | The latest Report is `ready` | Awaiting review |
+| person / review | The latest Report is `ready` and the Ticket has no schedule | Awaiting review |
 | person / blocked, failed | The latest Report is `blocked` or `failed`, and no person's message reached the Ticket since | Blocked · Failed |
+| scheduled | The Ticket has a schedule and its previous run is not working: its latest Report is `ready` or `waiting`, or its Assignment ended | Scheduled · next run `<time>` · Scheduled · paused |
 | working / queued | No Assignment, or a pending one | Queued |
 | idle | The latest Report is `waiting`, or the Assignment ended | Waiting for a Trigger |
 | working | Everything else | Working |
 
 A `person` stage means the Ticket cannot continue without human input. A new human message releases a `blocked` or `failed` Ticket to its Executor, so it moves to the next matching stage, usually `working`.
+
+A periodic task is a Ticket with a schedule, and it keeps the stages above. A `ready` Report on it is one run's result, not the Ticket's end, so the Ticket becomes `scheduled` between runs; the clock fires the next run as a `scheduled-run` Input. A `dropped` Report ends it, and a person's stop ends it at once. The schedule is marked paused while the Mandate no longer holds under the current Policy, and the clock resumes it when it holds again.
 
 An `idle` Ticket has finished its turn without an outstanding question. A Trigger on a subscribed Thread can continue it.
 

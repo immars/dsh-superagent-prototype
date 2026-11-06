@@ -18,6 +18,12 @@ it('marks each Ticket stage by whom it waits for, and an ended Ticket by its out
     ended: { at: '', by: outcome === 'stopped' ? 'human' : 'executor', outcome } }))
   expect(ended.map(mark => mark.label)).toEqual(['已完成', 'PR 已合并', 'PR 已关闭（未合并）', '无需处理', '人工停止'])
   expect(new Set(ended.map(({ tone, dot, icon }) => `${tone} ${dot} ${icon}`))).toEqual(new Set(['neutral idle stop']))
+  const schedule = { period: 'minutely' as const, every: 15, timeZone: 'UTC', nextAt: '2030-01-01T00:00:00.000Z' }
+  const scheduled = ticketMark(t, { stage: 'scheduled', ended: undefined, schedule })
+  expect([scheduled.tone, scheduled.dot, scheduled.icon]).toEqual(['info', 'done', 'clock'])
+  expect(scheduled.label).toContain('已排期')
+  const paused = ticketMark(t, { stage: 'scheduled', ended: undefined, schedule: { ...schedule, paused: 'policy' } })
+  expect(paused).toMatchObject({ label: '已排期 · 已暂停', tone: 'warning', dot: 'warning', icon: 'clock' })
   expect(['failed', 'blocked', 'waiting', 'ready', 'progress', undefined].map(reportDot)).toEqual(['error', 'warning', 'warning', 'done',
     'ongoing', 'ongoing'])
 })

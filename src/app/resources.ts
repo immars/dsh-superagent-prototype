@@ -31,6 +31,7 @@ export const RESOURCES: readonly { name: string; holds: string; executor?: true 
   { name: 'decision/<id>', holds: 'one decision with its audit' },
   { name: 'ticket/<id>', holds: 'a ticket\'s card, the trigger, decision and threads it is tied to, its latest assignments with the start of each '
     + 'report, and its inputs, newest first', executor: true },
+  { name: 'scheduled', holds: 'open periodic tasks, oldest first, with their interval, next run, requester and last result preview' },
   { name: 'ticket/<id>/assignment', holds: 'its assignment text', executor: true },
   { name: 'ticket/<id>/assignments', holds: 'its assignments, newest first, with the start of each report', executor: true },
   { name: 'ticket/<id>/inputs', holds: 'its inputs, newest first', executor: true },
@@ -123,6 +124,12 @@ const ROUTES: readonly Route[] = [
     const host = main(read), tickets = host.store.tickets.list()
     const card = (ticket: Ticket) => ({ ...ticketCard(ticket), ...host.sessions.modelRetry(runningAssignment(ticket) && workerSessionId(ticket.id)) })
     return list(read, (offset, count) => tickets.slice(offset, offset + count).map(card))
+  }],
+  ['scheduled', read => {
+    const { store } = main(read)
+    const scheduled = store.tickets.open().filter(ticket => ticket.schedule).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    return list(read, (offset, count) => scheduled.slice(offset, offset + count).map(ticket => ({ ...ticketCard(ticket),
+      requested_by: ticket.mandate.actor.id })))
   }],
   ['triggers', read => {
     const { store } = main(read)
@@ -278,7 +285,7 @@ const ROUTES: readonly Route[] = [
       const input = ticket.inputs.find(item => key(item.id) === part || item.id === part)
       const trigger = input?.kind === 'trigger' ? host.store.triggers.get(input.triggerId) : undefined
       const card = trigger && input?.kind === 'trigger' ? triggerMessage(trigger, await host.sourceLink(trigger, signal), input.note) : undefined
-      const message = input && inputMessage(input, card)
+      const message = input && inputMessage(input, card, ticket)
       if (message === undefined) throw new Error('Unknown ticket input')
       body = message
     } else if (section === 'message' && part && /^\d+$/.test(part)) {

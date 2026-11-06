@@ -1,7 +1,7 @@
 /** Shared view projections for triggers, tickets, threads, decisions, and channel links. */
 import { z } from 'zod'
 import { canRetry, followupOwners, latestReport, liveTicket, settled, threadKey, ticketStage, type ActorRef, type ChannelRef, type Decision,
-  type DecisionKind, type Thread, type ThreadFacts, type Ticket, type TicketStage, type Trigger } from '../../core/index.ts'
+  type DecisionKind, type Schedule, type Thread, type ThreadFacts, type Ticket, type TicketStage, type Trigger } from '../../core/index.ts'
 import { allowedSender, listedBot } from '../../policy.ts'
 import type { ChannelLink, Localized } from '../../sources/kind.ts'
 import type { SourceRegistry } from '../../sources/registry.ts'
@@ -33,6 +33,9 @@ export function ownersOf(store: Pick<Store, 'tickets' | 'threads' | 'triggers'>)
     triggers: store.triggers }
   return trigger => followupOwners(trigger, records)
 }
+/** The last outbound message problem a Ticket's conversation has: one that is failing and retried, or one dropped for good. */
+export type ReplyProblem = { kind: 'failed'; error: string; attempts: number }
+  | { kind: 'dropped'; reason: 'channelGone' | 'channelIgnored'; at: string }
 /** One request's reads, each read once: the Threads each Ticket subscribes to, the rules by id, and the senders' names. */
 export interface Snapshot extends ViewHost {
   threadsOf(ticketId: string): Thread[]
@@ -42,6 +45,8 @@ export interface Snapshot extends ViewHost {
   actor(actor: ActorRef, human?: boolean): ActorView
   /** The owners of follow-ups (see `ownersOf`). */
   owners: Owners
+  /** The newest message's delivery problem for a ticket, if it has not gone out. */
+  replyProblem(ticketId: string): ReplyProblem | undefined
 }
 export function snapshot(host: ViewHost): Snapshot {
   const { store, sources } = host
@@ -64,7 +69,14 @@ export function snapshot(host: ViewHost): Snapshot {
     const unnamed = sources.kind(source)?.policy?.unnamed
     return { source, id, name: unnamed ? human === false ? unnamed.bot : unnamed.person : named(id) }
   }
-  return { ...host, threadsOf, rule: id => ({ id, name: rules.get(id) ?? id }), actor, owners: ownersOf(store) }
+  const replyProblem = (ticketId: string): ReplyProblem | undefined => {
+    const last = store.read.lastReply(ticketId)
+    if (last?.status === 'dropped' && last.dropped) return { kind: 'dropped', ...last.dropped }
+    if (last?.status !== 'pending') return undefined
+    const failed = store.read.failingReplies().find(item => item.id === last.id)
+    return failed ? { kind: 'failed', error: failed.error, attempts: failed.attempts } : undefined
+  }
+  return { ...host, threadsOf, rule: id => ({ id, name: rules.get(id) ?? id }), actor, owners: ownersOf(store), replyProblem }
 }
 
 /**
@@ -115,11 +127,16 @@ function ticketNote(ticket: Ticket, stage: TicketStage): { text: string; error: 
   if ((stage.action !== 'blocked' && stage.action !== 'failed') || !summary) return undefined
   return { text: preview(summary.split('\n')[0]!), error: stage.action === 'failed' }
 }
+/** A Ticket's stored schedule as the panel reads it, in camelCase with the next and last run times. */
+export const scheduleView = (schedule: Schedule) => ({ period: schedule.period, every: schedule.every, ...schedule.at ? { at: schedule.at } : {},
+  timeZone: schedule.timeZone, nextAt: schedule.nextAt, ...schedule.lastRunAt ? { lastRunAt: schedule.lastRunAt } : {},
+  ...schedule.paused ? { paused: schedule.paused } : {} })
 export function ticketSummary(ticket: Ticket) {
   const stage = ticketStage(ticket)
   const note = ticketNote(ticket, stage)
   const state = liveTicket(ticket) ? 'open' as const : 'ended' as const
   return { id: ticket.id, title: ticket.title, state, ...stage, ...note ? { note } : {},
+    ...(ticket.schedule ? { schedule: scheduleView(ticket.schedule) } : {}),
     ...(ticket.target ? { target: ticket.target } : {}),
     actions: { retry: canRetry(ticket), stop: liveTicket(ticket) }, strength: ticket.mandate.strength, ended: ticket.ended,
     attention: ticket.attention && { ...ticket.attention, question: markdown(ticket.attention.question) },
@@ -139,8 +156,14 @@ export function threadFacts(store: Store, thread: Thread) {
   return { key: thread.key, source: thread.ref.source, title: threadTitle(store, thread), ...url ? { url } : {}, facts: (thread.meta.facts ?? {}) as ThreadFacts }
 }
 export type ThreadFactsView = ReturnType<typeof threadFacts>
-export const ticketLine = (view: Snapshot, ticket: Ticket) => ({ ...ticketSummary(ticket),
-  threads: view.threadsOf(ticket.id).map(thread => threadFacts(view.store, thread)) })
+export const ticketLine = (view: Snapshot, ticket: Ticket) => {
+  const problem = ticket.schedule ? view.replyProblem(ticket.id) : undefined
+  return { ...ticketSummary(ticket),
+    // The requesters list needs a name, not an identifier; a periodic task keeps it beside its schedule.
+    ...(ticket.schedule ? { requestedBy: view.actor(ticket.mandate.actor, ticket.mandate.basis.via !== 'bot') } : {}),
+    ...(problem ? { deliveryProblem: problem } : {}),
+    threads: view.threadsOf(ticket.id).map(thread => threadFacts(view.store, thread)) }
+}
 export function threadTitle(store: Pick<Store, 'read'>, thread: Thread): string {
   const label = attribute(thread.meta.label)
   if (label) return label

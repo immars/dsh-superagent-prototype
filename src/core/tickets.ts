@@ -8,10 +8,12 @@ import type { AssessmentOutcome } from './ports.ts'
 import { EnginePart, type EngineOptions } from './part.ts'
 import type { Replies } from './replies.ts'
 import { canRetry } from './stage.ts'
+import { nextScheduleAt, scheduleOf, scheduledBusy } from './schedule.ts'
 
 const sameChannel = (a: ChannelRef, b: ChannelRef): boolean => JSON.stringify(a) === JSON.stringify(b)
-/** Whether an Input is a message no person wrote, such as CI's, a bot's, or the main Session's note. */
-export const automatic = (input: TicketInput | undefined): boolean => input?.kind === 'note' || (input?.kind === 'trigger' && !input.human)
+/** Whether an Input is a message no person wrote, such as CI's, a bot's, the main Session's note, or the clock's run. */
+export const automatic = (input: TicketInput | undefined): boolean => input?.kind === 'note' || input?.kind === 'scheduled-run'
+  || (input?.kind === 'trigger' && !input.human)
 /**
  * Whether a ticket's worker read a Trigger Input before `until`, its latest report or turn end: its Session took the message
  * into a step before then. One delivered before reads were recorded counts as read once it reached the worker by then.
@@ -45,6 +47,11 @@ export class Tickets extends EnginePart {
     for (const triggerId of triggerIds) {
       const channel = this.repo.triggers.get(triggerId)?.channel
       if (channel && !ticket.channels.some(item => sameChannel(item, channel))) ticket.channels.push(channel)
+    }
+    // A periodic task records its schedule with the Mandate that authorizes it, before the Executor prepares its context.
+    if (outcome.schedule) {
+      if (!ticket.channels.length) throw new UserError('scheduleNoChannel')
+      ticket.schedule = scheduleOf(outcome.schedule, at, origin.triggerId)
     }
     ticket = this.options.prepareTicket?.(ticket, outcome) ?? ticket
     const assignment = this.newAssignment(ticket)
@@ -81,6 +88,8 @@ export class Tickets extends EnginePart {
       if (!follow) continue
       follow.closed = { at, outcome }
       this.repo.tickets.save(ticket)
+      // A periodic task stays open between runs: a followed pull request's close neither ends it nor stops its schedule.
+      if (ticket.schedule) continue
       const done = this.followsDone(ticket)
       if (!done || this.unfinished(ticket, at)) continue
       // Work resumed after the close and finished ends now.
@@ -151,6 +160,38 @@ export class Tickets extends EnginePart {
     const ticket = this.require(ticketId)
     if (!liveTicket(ticket) || runningAssignment(ticket)?.report?.state !== 'waiting') return false
     this.addInput(ticket, { id: `status:${ticketId}:${ticket.updatedAt}`, kind: 'text', text: STATUS_REQUEST, at: this.now() })
+    return true
+  }
+  /**
+   * Fire one due run of a periodic task: revalidate its Mandate, add the `scheduled-run` Input, set `lastRunAt` and advance
+   * `nextAt` along the schedule, all in the caller's transaction. It does nothing while a run is blocked, waiting for a
+   * person, or still working, and marks the schedule `paused` when the Mandate no longer holds.
+   * @returns Whether a run was recorded.
+   * @throws UserError when the ticket is unknown or its schedule is invalid.
+   */
+  fireScheduled(ticketId: string): boolean {
+    const ticket = this.require(ticketId)
+    const schedule = ticket.schedule
+    if (!liveTicket(ticket) || !schedule) return false
+    const at = this.now()
+    if (Date.parse(schedule.nextAt) > Date.parse(at)) return false
+    // The design's order: a person waiting, then a run still working, then the Mandate.
+    if (waitsForPerson(ticket) || scheduledBusy(ticket)) return false
+    if (!this.policy().revalidate(ticket.mandate)) {
+      schedule.paused = 'policy'
+      ticket.updatedAt = at
+      this.repo.tickets.save(ticket)
+      return false
+    }
+    const scheduledFor = schedule.nextAt
+    const input: TicketInput = { id: key('input', ticket.id, 'scheduled-run', scheduledFor), kind: 'scheduled-run', scheduledFor, at }
+    schedule.lastRunAt = at
+    schedule.nextAt = nextScheduleAt(schedule, at)
+    delete schedule.paused
+    ticket.updatedAt = at
+    this.repo.tickets.save(ticket)
+    // The normal delivery path wakes the idle worker or hands the run to the running Assignment.
+    this.addInput(ticket, input)
     return true
   }
   /**
