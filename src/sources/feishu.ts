@@ -4,16 +4,16 @@ import { z } from 'zod'
 import { FeishuBotSchema } from '../deployment.ts'
 import { feishuLink, sendFeishu } from './feishu-channel.ts'
 import { feishuThreadContext } from './feishu-read.ts'
-import { refreshChatNames, runFeishu } from './feishu-loops.ts'
-import { SOURCE, feishuTriggerId } from './feishu-trigger.ts'
-import { sourceContext } from './host.ts'
-import type { Localized, SourceKind } from './kind.ts'
+import { refreshChatNames, runFeishuAccount } from './feishu-loops.ts'
+import { SOURCE, feishuTriggerId, isFeishuSource } from './feishu-trigger.ts'
+import { sourceContext, type SourceHost } from './host.ts'
+import type { Localized, SourceInstance, SourceKind } from './kind.ts'
 import type { SourceRegistry } from './registry.ts'
 
-export { SOURCE, feishuRef, feishuThreadId, feishuTime, feishuTrigger, feishuTriggerId, historyEvent, withMentionNames }
+export { SOURCE, feishuChannel, feishuParent, feishuRef, feishuThreadId, feishuTime, feishuTrigger, feishuTriggerId, historyEvent, withMentionNames }
   from './feishu-trigger.ts'
 export type { FeishuEvent } from './feishu-trigger.ts'
-export { backfillChat, consumerRetry, pollThreads, refreshChatNames, threadRef } from './feishu-loops.ts'
+export { backfillChat, consumerRetry, pollThreads, refreshChatNames, runFeishuAccount, threadRef } from './feishu-loops.ts'
 const MembersSchema = z.looseObject({
   users: z.array(z.looseObject({ member_id: z.string(), name: z.string() })),
   has_more: z.boolean(), truncations: z.array(z.unknown()).optional(),
@@ -30,7 +30,17 @@ const FeishuConfigSchema = FeishuBotSchema.extend({
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>
 export const feishuKind: SourceKind<FeishuConfig> = {
   kind: SOURCE,
-  refreshLabels: (host, signal) => refreshChatNames(sourceContext(host, feishuKind), signal),
+  /**
+   * Reads the account's joined chats. The caller normally names the instance whose labels to write; callers that do not
+   * (the settings save path) refresh every Feishu instance, because one bot sees the same chats for all of them.
+   */
+  refreshLabels: async (host: SourceHost, instance?: SourceInstance, signal?: AbortSignal) => {
+    if (instance) return refreshChatNames(sourceContext(host, feishuKind, instance.id), signal)
+    const ids = host.sources.instances().filter(item => item.installed && item.kind === feishuKind.kind).map(item => item.id)
+    let names: Record<string, string> = {}
+    for (const id of ids) names = { ...names, ...await refreshChatNames(sourceContext(host, feishuKind, id), signal) }
+    return names
+  },
   title: { zh: '飞书', en: 'Feishu' },
   description: { zh: '接收下列群和私聊中发给机器人的消息，补收群历史并轮询订阅的线程。', en: 'Receives messages to the bot in these chats and direct messages, recovers chat history and polls subscribed Threads.' },
   schema: FeishuConfigSchema,
@@ -66,7 +76,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   threadContext: feishuThreadContext,
   find: query => ({ threads: [], terms: [...new Set(query.match(/om_[A-Za-z0-9_-]+/g) ?? [])] }),
   // A message's Trigger is named after the message, so the one it answers is named after its parent.
-  repliesTo: trigger => typeof trigger.meta.parentId === 'string' ? feishuTriggerId(trigger.meta.parentId) : undefined,
+  repliesTo: trigger => typeof trigger.meta.parentId === 'string'
+    ? feishuTriggerId(trigger.meta.parentId, trigger.source) : undefined,
   policy: {
     unnamed: { person: { zh: '飞书用户', en: 'Feishu user' }, bot: { zh: '飞书机器人', en: 'Feishu bot' } },
     schema: z.object({
@@ -120,7 +131,8 @@ export const feishuKind: SourceKind<FeishuConfig> = {
       { key: 'DSH_SUPERAGENT_FEISHU_BOT', description: { zh: '飞书机器人；lark-cli 以它行事', en: 'The Feishu bot; lark-cli acts as it' } },
       { key: 'DSH_SUPERAGENT_FEISHU_CHAT', description: { zh: '接下工单的飞书群 chat_id；工单不是从飞书来的时为空', en: 'chat_id of the Feishu chat that started the ticket; empty when the ticket did not start on Feishu' } },
     ],
-    values: ({ deployment, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: deployment.feishu ? deployment.feishu.name || deployment.feishu.botId : '', DSH_SUPERAGENT_FEISHU_CHAT: trigger?.source === SOURCE ? String(trigger.meta.chatId ?? '') : '' }),
+    values: ({ deployment, trigger }) => ({ DSH_SUPERAGENT_FEISHU_BOT: deployment.feishu ? deployment.feishu.name || deployment.feishu.botId : '',
+      DSH_SUPERAGENT_FEISHU_CHAT: trigger && isFeishuSource(trigger.source) ? String(trigger.meta.chatId ?? '') : '' }),
   },
   facts: (deployment): Record<string, Localized | string> => deployment?.feishu ? { cli: { zh: `当前机器人 ${deployment.feishu.name || deployment.feishu.botId}`, en: `Current bot ${deployment.feishu.name || deployment.feishu.botId}` } } : {},
 }
@@ -133,7 +145,8 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.orchestrator.sources.register(feishuKind), 'feishu: source kind')
   ctx.effect(() => {
     const controller = new AbortController()
-    const running = runFeishu(sourceContext(ctx.orchestrator, feishuKind), controller.signal)
+    // One bot event consumer for every enabled Feishu instance, with per-instance history and polling loops.
+    const running = runFeishuAccount(ctx.orchestrator, feishuKind, controller.signal)
     return async () => { controller.abort(); await running }
   })
 }

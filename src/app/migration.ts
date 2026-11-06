@@ -531,7 +531,9 @@ function feishuTopics(store: Store): void {
   for (const name of store.keys(KV.feishu.topics)) {
     const topics: unknown = store.get(name)
     if (!Array.isArray(topics)) continue
-    const seen = store.get(KV.feishu.history(name.slice(KV.feishu.topics.prefix.length))) ?? new Date().toISOString()
+    // Schema 10 predates additional instances, so every stored key belongs to the default `feishu` instance.
+    const chat = name.slice(KV.feishu.topics.prefix.length + 1)
+    const seen = store.get(KV.feishu.history('feishu', chat)) ?? new Date().toISOString()
     store.set(name, Object.fromEntries(topics.map(id => [String(id), seen])))
   }
 }
