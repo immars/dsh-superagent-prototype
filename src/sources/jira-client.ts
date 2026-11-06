@@ -54,6 +54,10 @@ const SearchSchema = z.looseObject({ issues: z.array(z.unknown()).default([]), n
   isLast: z.boolean().nullish(), startAt: z.number().int().default(0), total: z.number().int().default(0) })
 const ChangelogPageSchema = z.looseObject({ values: z.array(z.unknown()).default([]), startAt: z.number().int().default(0),
   total: z.number().int().default(0), isLast: z.boolean().nullish() })
+/** Jira Server/DC returns the whole changelog as the `changelog` expansion of the issue instead of a paged resource. */
+const ChangelogExpansionSchema = z.looseObject({
+  changelog: z.looseObject({ histories: z.array(z.unknown()).default([]) }).nullish(),
+})
 const CommentPageSchema = z.looseObject({ comments: z.array(z.unknown()).default([]), startAt: z.number().int().default(0),
   maxResults: z.number().int().default(0), total: z.number().int().default(0) })
 const PAGE_SIZE = 100
@@ -199,6 +203,13 @@ export class JiraClient {
     return value
   }
   async changelog(issue: string): Promise<JiraHistory[]> {
+    // Jira Server/DC has no `/issue/{key}/changelog` resource: that path answers 404 "null for uri", and the
+    // changelog is only available as an expansion of the issue, which returns it in one response.
+    if (this.connection.platform === 'server') {
+      const value = await this.request(ChangelogExpansionSchema, 'GET', `/issue/${encodeURIComponent(issue)}`,
+        { query: { expand: 'changelog', fields: 'updated' } })
+      return validItems(JiraHistorySchema, value.changelog?.histories ?? [])
+    }
     const histories: JiraHistory[] = []
     let startAt = 0
     for (;;) {

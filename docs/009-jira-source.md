@@ -28,7 +28,7 @@ Polling cannot observe the administrator's event stream, so the Source derives t
 | `updated` | A changelog history since the cursor that changes another field | issue key, history id |
 | `commented` | A comment whose `created` or `updated` time is at or after the cursor | issue key, comment id, comment version |
 
-The changelog and comment reads happen only when their change kind is configured, so listening to new issues alone costs one search request per poll. A history that changes both status and another field is reported as a transition; a creation-time history is ignored because `created` already reports it.
+The changelog and comment reads happen only when their change kind is configured, so listening to new issues alone costs one search request per poll. A history that changes both status and another field is reported as a transition; a creation-time history is ignored because `created` already reports it. On Server/DC the changelog is read from the issue's `changelog` expansion, because Jira Server has no `/issue/{key}/changelog` resource; Cloud reads the paged changelog resource instead.
 
 The cursor is an ISO timestamp stored under `KV.jira.cursor`, together with a fingerprint of the site, project, issue-type filter and extra JQL. A changed fingerprint starts a new cursor, so a new query never resumes inside an old one. The JQL literal is formatted in UTC and rounded down a minute with an overlap; a replay produces the same stable Trigger ids and therefore only duplicates.
 
