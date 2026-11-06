@@ -64,6 +64,10 @@ export const githubKind: SourceKind<GithubConfig> = {
   health: ['github'],
   channel: { send: sendGithub, link: githubLink },
   threadContext: githubThreadContext,
+  repository: instance => {
+    const repository = String(instance.config.repository ?? '')
+    return repository ? { instance: instance.id, repository, url: `https://github.com/${repository}` } : undefined
+  },
   // `#12`, `12`, or the page of an Issue or PR, of any repository, names Thread 12.
   find: (query, instance) => {
     const number = (/^#?(\d+)$/.exec(query.trim()) ?? /github\.com\/[^/]+\/[^/]+\/(?:pull|issues)\/(\d+)/.exec(query))?.[1]
