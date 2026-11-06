@@ -9,7 +9,7 @@ import type { Store } from './store.ts'
 export interface OutboxHost {
   readonly store: Pick<Store, 'atomic' | 'receipts'>
   readonly effects: Pick<Effects, 'enqueue' | 'cancel' | 'handle' | 'idle'>
-  readonly sources: Pick<SourceRegistry, 'instance' | 'channelAllowed' | 'send'>
+  readonly sources: Pick<SourceRegistry, 'instance' | 'kindOf' | 'channelAllowed' | 'send'>
   readonly commands: Commands
   paused(): boolean
 }
@@ -26,7 +26,7 @@ export class Outbox implements OutboxPort {
   /** Record a message receipt and enqueue its delivery effect atomically; duplicate message IDs are ignored. */
   send(message: OutboundMessage): void {
     // Validate IM reply length here; acknowledgements are already validated when decided.
-    if (message.kind === 'reply' && message.channel.source === 'feishu') checkedImText(message.text)
+    if (message.kind === 'reply' && this.host.sources.kindOf(message.channel.source)?.kind === 'feishu') checkedImText(message.text)
     const { store, effects } = this.host
     store.atomic(() => { if (store.receipts.add(message)) effects.enqueue('reply', message.id, {}) })
   }

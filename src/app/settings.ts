@@ -306,7 +306,7 @@ export class Settings {
     const kind = instance && sources.kindOf(id)
     if (!kind?.refreshLabels) throw new UserError('noLabels')
     const before = store.get(KV.sources.labels(id)) ?? {}
-    const after = await kind.refreshLabels(this.host.sourceHost)
+    const after = await kind.refreshLabels(this.host.sourceHost, instance)
     return { added: Object.entries(after).filter(([key]) => !(key in before)).map(([, name]) => name).sort((a, b) => a.localeCompare(b)) }
   }
 }

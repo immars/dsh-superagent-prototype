@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Engine, MemoryRepositories, key, type Assessor, type Executor, type Thread, type Ticket, type Trigger } from '../src/core/index.ts'
-import { backfillChat, consumerRetry, feishuKind, feishuTriggerId, feishuRef, feishuTime, feishuTrigger, historyEvent }
+import { Engine, MemoryRepositories, key, threadKey, type Assessor, type Executor, type Thread, type Ticket, type Trigger } from '../src/core/index.ts'
+import { backfillChat, consumerRetry, feishuKind, feishuParent, feishuTriggerId, feishuRef, feishuTime, feishuTrigger, historyEvent, refreshChatNames }
   from '../src/sources/feishu.ts'
 import { KV } from '../src/kv.ts'
 import { apply as applyFeishu, pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
-import { runFeishu } from '../src/sources/feishu-loops.ts'
+import { runFeishu, runFeishuAccount } from '../src/sources/feishu-loops.ts'
 import { commentTrigger, githubAddress, githubChannel, issueTrigger, type GithubComment, type GithubIssue } from '../src/sources/github-trigger.ts'
 import { claimPull, observePull, pullEndNotices, pullOf, ticketBranch, type Pull } from '../src/sources/github-pull.ts'
 import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
@@ -126,6 +126,38 @@ describe('feishu source', () => {
     expect(feishuRef(trigger)).toEqual({ triggerId: trigger.id, chatId: 'oc_1', messageId: 'om_2', at: trigger.at })
     expect(feishuTrigger({ message_id: 'om_3', chat_id: 'oc_1', chat_type: 'p2p', sender_id: 'ou_bot', sender_type: 'bot', content: 'me', create_time: '1' }, 'ou_bot', 'cli_bot')).toBeUndefined()
     expect(feishuTrigger(historyEvent({ message_id: 'om_4', chat_id: 'oc_1', create_time: '2', sender: { id: 'ou_x', sender_type: 'app' }, body: { content: '{"text":"from app"}' } }, 'oc_1', false), 'ou_bot', 'cli_bot')).toMatchObject({ human: false, text: 'from app', threads: [{ id: 'oc_1:om_4' }] })
+  })
+  it('keys triggers, threads and channels by the Feishu instance, keeping the default instance byte-compatible', () => {
+    const message = { message_id: 'om_2', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user',
+      content: 'hi', create_time: '1757376000000', mentions: [{ id: 'cli_bot' }], root_id: 'om_1', parent_id: 'om_1' }
+    const fallback = feishuTrigger(message, 'ou_bot', 'cli_bot')!
+    const ops = feishuTrigger(message, 'ou_bot', 'cli_bot', 'feishu-ops')!
+    // The default instance keeps today's trigger ID, thread key, Channel and actor source.
+    expect(fallback.id).toBe(key('feishu', 'om_2'))
+    expect(fallback.threads).toEqual([{ source: 'feishu', id: 'oc_1:om_1' }])
+    expect(threadKey(fallback.threads[0]!)).toBe('feishu:oc_1:om_1')
+    expect(fallback.channel).toEqual({ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_2' } })
+    expect(fallback.actor).toEqual({ source: 'feishu', id: MEMBER })
+    // An additional instance separates every identity and resolves its own references.
+    expect(ops.id).not.toBe(fallback.id)
+    expect(ops.threads).toEqual([{ source: 'feishu-ops', id: 'oc_1:om_1' }])
+    expect(threadKey(ops.threads[0]!)).toBe('feishu-ops:oc_1:om_1')
+    expect(ops.channel).toEqual({ source: 'feishu-ops', thread: 'feishu-ops:oc_1', address: { chatId: 'oc_1', messageId: 'om_2' } })
+    expect(ops.actor).toEqual({ source: 'feishu-ops', id: MEMBER })
+    expect(feishuRef(ops)).toMatchObject({ triggerId: ops.id, chatId: 'oc_1', messageId: 'om_2' })
+    expect(feishuParent(ops)).toBe(feishuTriggerId('om_1', 'feishu-ops'))
+  })
+  it('refreshes chat names under the instance\'s own label family', async () => {
+    const h = host()
+    h.store.saveSettings({ ...h.store.settings(), sources: { ...h.store.settings().sources,
+      'feishu-ops': { kind: 'feishu', enabled: true, config: { chats: [] } } } })
+    const lark = vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ chats: [{ chat_id: 'oc_1', name: 'One' }] } as never)
+    await feishuKind.refreshLabels!(h, h.sources.instance('feishu-ops')!)
+    expect(h.store.get(KV.sources.labels('feishu-ops'))).toEqual({ oc_1: 'One' })
+    expect(h.store.get(KV.sources.labels('feishu'))).toBeUndefined()
+    await refreshChatNames(h.context('feishu-ops'))
+    expect(h.store.get(KV.sources.labels('feishu-ops'))).toEqual({ oc_1: 'One' })
+    lark.mockRestore()
   })
   it('polls subscribed threads and stores unseen replies as triggers on that thread', async () => {
     const h = host()
@@ -1086,6 +1118,31 @@ describe('feishu event consumer', () => {
     const turnOff = () => store.saveSettings(SettingsSchema.parse({ sources: { feishu: { enabled: false, config: { chats: [] } } } }))
     return { ctx: sourceContextOf(deps, feishuKind), health, store, turnOff }
   }
+  /** A Source host with the default Feishu instance and an additional `feishu-ops` instance on the one bot CLI. */
+  function accountHost(path: string) {
+    const store = new Store(join(dir, 'account.sqlite'))
+    const chats = [{ chatId: 'oc_group', listen: 'mentions' }]
+    store.saveSettings(SettingsSchema.parse({ sources: {
+      feishu: { enabled: true, config: { chats } },
+      'feishu-ops': { kind: 'feishu', label: 'Ops', enabled: true, config: { chats } },
+    } }))
+    const board = new HealthBoard()
+    const sources = new SourceRegistry(() => store.settings(), board)
+    sources.register(feishuKind)
+    const assessor: Assessor = { request: vi.fn(async () => {}) }
+    const executor: Executor = { start: vi.fn(async () => {}), deliver: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
+    const outbox = { send: () => {}, status: () => undefined, withdraw: () => {} }
+    const engine = new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(store.settings(), sources), assessor, executor, outbox })
+    const deployment = testDeployment({ feishu: { ...testDeployment().feishu!, cli: path } })
+    const commands = new Commands(() => deployment, {}, controller.signal)
+    const deps: SourceContextDeps = { store, engine, outbox: { send: () => {} }, commands, sources, deployment, ready: Promise.resolve(), configured: () => true,
+      receive: (trigger: Trigger) => engine.receive(trigger) }
+    const context = (target: string | { kind: string; health: readonly string[] }) => {
+      const id = typeof target === 'string' ? target : target.kind
+      return sourceContextOf(deps, sources.kindOf(id) ?? feishuKind, id)
+    }
+    return { host: { sources, context }, health: board.all, store }
+  }
 
   /** A message event line as `event consume` prints it; a group message mentions the bot. */
   const event = (id: string, chat: string, type: 'group' | 'p2p') => JSON.stringify({ message_id: id, chat_id: chat, chat_type: type,
@@ -1100,6 +1157,19 @@ describe('feishu event consumer', () => {
     expect(['om_1', 'om_2'].map(id => store.triggers.get(feishuTriggerId(id))?.meta.direct)).toEqual([false, true])
     expect(store.get(KV.feishu.chats)).toEqual({ oc_group: false, oc_dm: true })
     expect(health.feishu).toMatchObject({ state: 'error', detail: expect.stringContaining('JSON') })
+    controller.abort(); await running; store.close()
+  }, 20_000)
+  it('runs one account consumer and dispatches each event to every enabled Feishu instance', async () => {
+    writeFileSync(join(dir, 'events'), event('om_1', 'oc_group', 'group') + '\n')
+    const { host, health, store } = accountHost(cli('events'))
+    running = runFeishuAccount(host, feishuKind, controller.signal)
+    await vi.waitFor(() => expect(store.triggers.get(feishuTriggerId('om_1', 'feishu-ops'))).toBeDefined(), until)
+    expect(store.triggers.get(feishuTriggerId('om_1'))).toMatchObject({ source: 'feishu', threads: [{ source: 'feishu', id: 'oc_group:om_1' }] })
+    expect(store.triggers.get(feishuTriggerId('om_1', 'feishu-ops'))).toMatchObject({ source: 'feishu-ops',
+      threads: [{ source: 'feishu-ops', id: 'oc_group:om_1' }], channel: { source: 'feishu-ops' } })
+    // The shared bot has one event consumer, however many instances it serves.
+    expect(runs()).toBe(1)
+    expect(health.feishu).toMatchObject({ state: 'ready' })
     controller.abort(); await running; store.close()
   }, 20_000)
   it('drops the events it reads once the Source is off', async () => {
@@ -1120,7 +1190,7 @@ describe('feishu event consumer', () => {
       const chat = (chatId: string) => ({ chatId, listen: 'mentions' })
       const { ctx, health, store } = consumerSource(cli('ready'), { chats: [chat('oc_a'), chat('oc_b')], directMessages })
       store.set(KV.feishu.chats, { oc_dm: true, oc_a: false })
-      for (const chat of ['oc_a', 'oc_b', 'oc_dm']) store.set(KV.feishu.history(chat), hour)
+      for (const chat of ['oc_a', 'oc_b', 'oc_dm']) store.set(KV.feishu.history('feishu', chat), hour)
       const chats: string[] = []
       const lark = vi.spyOn(Commands.prototype, 'lark').mockImplementation(async args => {
         const params = args[2] === '/open-apis/im/v1/messages' ? JSON.parse(args.at(-1)!) as { container_id: string } : undefined
@@ -1132,7 +1202,7 @@ describe('feishu event consumer', () => {
       const loops = runFeishu(ctx, AbortSignal.any([stop.signal, controller.signal]))
       await vi.waitFor(() => expect(['ready', 'error']).toContain(health.history?.state), until)
       stop.abort(); await loops; lark.mockRestore()
-      const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history(chat))]))
+      const cursors = Object.fromEntries(['oc_a', 'oc_b', 'oc_dm'].map(chat => [chat, store.get(KV.feishu.history('feishu', chat))]))
       const result = { chats, cursors, history: health.history }
       store.close(); rmSync(join(dir, 'db.sqlite'), { force: true }); rmSync(join(dir, 'db.sqlite-wal'), { force: true })
       rmSync(join(dir, 'db.sqlite-shm'), { force: true })

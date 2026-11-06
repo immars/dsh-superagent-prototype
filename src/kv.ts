@@ -57,10 +57,15 @@ export const KV = {
    */
   jira: { cursor: family<{ scope: string; since: string }, [instance: string]>('jira-cursor', instance => instance === 'jira' ? '' : `-${instance}`) },
   /**
-   * Feishu Source: known chats (`true` for direct messages); per-chat history cursor and active topics mapped from topic ID
-   * to last-seen timestamp; and per-polled-thread seen message IDs and initialization flag.
+   * Feishu Source: the account's known chats (`true` for direct messages); per-instance, per-chat history cursor and active
+   * topics mapped from topic ID to last-seen timestamp; and per-instance, per-polled-thread seen message IDs and
+   * initialization flag. The default instance keeps today's key strings.
    */
-  feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
-    topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
-    seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  feishu: { chats: record<Record<string, boolean>>('feishu-chats'),
+    history: family<string, [instance: string, chat: string]>('feishu-history', (instance, chat) => instance === 'feishu' ? `:${chat}` : `-${instance}:${chat}`),
+    topics: family<Record<string, string>, [instance: string, chat: string]>('feishu-history-threads',
+      (instance, chat) => instance === 'feishu' ? `:${chat}` : `-${instance}:${chat}`),
+    seen: family<string[], [instance: string, thread: string]>('thread-seen', (instance, thread) => instance === 'feishu' ? `:${thread}` : `-${instance}:${thread}`),
+    initialized: family<boolean, [instance: string, thread: string]>('thread-initialized',
+      (instance, thread) => instance === 'feishu' ? `:${thread}` : `-${instance}:${thread}`) },
 }

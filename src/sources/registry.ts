@@ -128,7 +128,7 @@ export class SourceRegistry implements SourceScope {
     return kind.channel ? kind.channel.send({ commands }, message, instance.config) : 'gone'
   }
   link(channel: ChannelRef, links: ChannelLinks): ChannelLink {
-    const link = this.kindOf(channel.source)?.channel?.link(channel.address, links)
+    const link = this.kindOf(channel.source)?.channel?.link(channel.address, links, channel.source)
     return link ?? { url: '', label: { zh: channel.source, en: channel.source } }
   }
   find(query: string): { threads: string[]; terms: string[] } {
