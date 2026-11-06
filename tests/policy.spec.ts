@@ -288,6 +288,8 @@ describe('assessment outcomes', () => {
     const auto = settings('auto')
     const outcome = assessmentOutcome(accept(auto), auto, 'inferred')
     expect(outcome).toMatchObject({ kind: 'accept', rules: auto.policy.rules.filter(rule => rule.enabled).map(rule => rule.id), name: 'fix-copy' })
+    expect(assessmentOutcome({ ...accept(auto), execution_target: 'github-infra' }, auto, 'inferred'))
+      .toMatchObject({ kind: 'accept', executionTarget: 'github-infra' })
     expect(assessmentOutcome(accept(settings('observe')), settings('observe'), 'inferred'))
       .toMatchObject({ kind: 'ignore', reason: { code: 'observed', values: { text: 'asked' } }, audit: { would_accept: true } })
     expect(assessmentOutcome(accept(auto, false), auto, 'inferred')).toMatchObject({ kind: 'ignore', reason: { code: 'noRuleMatched' } })
