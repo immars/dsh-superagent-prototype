@@ -53,7 +53,7 @@ An allowed person states the recurrence in their message. The message is an expl
   "title": "Daily progress for acme/web and ABC",
   "worktree_name": "daily-progress",
   "acknowledgement": "Started now; then daily at 09:00 Asia/Shanghai.",
-  "schedule": { "period": "daily", "at": "09:00", "time_zone": "Asia/Shanghai" }
+  "schedule": { "period": "daily", "every": 1, "at": "09:00", "time_zone": "Asia/Shanghai" }
 }
 ```
 
@@ -62,16 +62,18 @@ Rules:
 - Only an explicit accept may carry a schedule. An inferred candidate cannot create one, so the same authorization boundary as every other Ticket applies.
 - The schedule is part of the accept outcome and is recorded on the Ticket together with the Mandate. It is not a settings block and not a Source instance.
 - `title` and `scope` are the task's name and boundary. The original Trigger text is the standing instruction the worker reads every run.
-- The first Assignment starts immediately, so the first run is the person's original request. `nextAt` is the first boundary strictly after the accept. The acknowledgement names both facts.
+- The first Assignment starts immediately, so the first run is the person's original request and covers the current schedule boundary. `nextAt` is the next boundary after it; see [Schedule semantics](#schedule-semantics). The acknowledgement names both facts.
 - If the request names no recurrence, the accept has no schedule. If it names an unsupported recurrence, the main Session does not substitute a supported one; it asks a concrete question, or accepts a one-off only when the message also asks for that one-off work.
-- A schedule is validated before the Ticket is created: period, `at`, time zone and the computed first `nextAt`.
+- A schedule is validated before the Ticket is created: period, positive integer `every`, `at` only for daily and weekly, time zone and the computed first `nextAt`.
 
 ### Schedule fields
 
 ```ts
 interface Schedule {
-  period: 'hourly' | 'daily' | 'weekly'
-  /** Wall-clock `HH:mm` for daily and weekly; unused for hourly. */
+  period: 'minutely' | 'hourly' | 'daily' | 'weekly'
+  /** How many period units between runs; a positive integer, 1 by default. */
+  every: number
+  /** Wall-clock `HH:mm` for daily and weekly; absent for minutely and hourly. Defaults to the accept's local time. */
   at?: string
   /** IANA zone, such as Asia/Shanghai. */
   timeZone: string
@@ -86,21 +88,37 @@ interface Schedule {
 }
 ```
 
+`every` lets one period express an interval: `minutely` 15 is every 15 minutes, `hourly` 2 is every 2 hours, and `daily` 3 is every 3 days. The main Session uses the unit the person named and states it in the acknowledgement.
+
 `Ticket.schedule?: Schedule` is additive. Existing Tickets have none and behave as today.
 
 ## Schedule semantics
 
 | Period | Runs |
 | --- | --- |
-| `hourly` | At the top of each hour in the task's zone; `at` is ignored |
-| `daily` | Every day at `at` in the task's zone |
-| `weekly` | Every Monday at `at` in the task's zone (a weekday choice is an open question) |
+| `minutely` | At the clock boundaries every `every` minutes in the task's zone |
+| `hourly` | At the clock boundaries every `every` hours in the task's zone |
+| `daily` | Every `every` days at `at` in the task's zone |
+| `weekly` | Every `every` weeks on Monday at `at` in the task's zone (a weekday choice is an open question) |
+
+`at` is used for daily and weekly only, and defaults to the accept's local time when the person names no time. A minutely or hourly schedule with `at` is refused. The clock ticks about every 30 seconds, so a minutely run can start up to 30 seconds after its scheduled instant.
+
+Examples:
+
+| Request | `schedule` |
+| --- | --- |
+| Every 15 minutes | `{ "period": "minutely", "every": 15 }` |
+| Every 2 hours | `{ "period": "hourly", "every": 2 }` |
+| Every 3 days | `{ "period": "daily", "every": 3, "at": "09:00" }` |
+| Every hour | `{ "period": "hourly", "every": 1 }` |
 
 - The time zone is the one the request states. Without a stated zone, the runtime's local zone is recorded, and the acknowledgement says which zone was used.
+- The first run is immediate and covers the current boundary. For `minutely` and `hourly`, `nextAt` is the next clock boundary after it; for `daily` and `weekly`, it is the next `at` occurrence (or Monday) after the current boundary. A task created at 09:30 with a daily 09:00 schedule first runs at 09:30 and then at 09:00 the next day.
+- Minutely and hourly are clock-aligned: every 15 minutes runs at :00, :15, :30 and :45; every 2 hours runs at 00:00, 02:00 and so on. A positive `every` that divides 60 minutes or 24 hours spaces the runs evenly; a non-divisor leaves a shorter last interval before the hour or day, and the main Session prefers a divisor when the person's wording allows.
+- A task created at 10:07 with a 15-minute schedule first runs at 10:07 (the 10:00–10:15 slot) and then at 10:15, 10:30, and so on. With a 2-hour schedule it first runs at 10:07 (the 10:00–12:00 slot) and then at 12:00. A 3-day schedule created at 15:00 on 6 November with `at` 09:00 first runs at 15:00 and then at 09:00 on 9 November.
 - `nextAt` is computed from wall-clock boundaries in the zone, not by adding fixed milliseconds, so a daily 09:00 remains 09:00 across a DST change. A nonexistent local time moves to the first valid instant after it; an ambiguous local time uses the earlier offset.
-- The first run is immediate and `nextAt` is the next boundary. A task created at 09:30 daily 09:00 first runs at 09:30 and then at 09:00 the next day.
 - A run that is due while the previous run is still working does not queue a second one. The clock waits and fires the pending run when the Ticket is idle again; there is never more than one due run waiting.
-- After downtime, a due `nextAt` is late, not lost: the first pass fires one late run and then sets `nextAt` to the next future boundary. Earlier missed boundaries are not replayed.
+- After downtime, a due `nextAt` is late, not lost: the first pass fires one late run and then advances `nextAt` along the same cadence to the next future instant. Earlier missed boundaries are not replayed.
 - A run is not fired while the Ticket waits for a person after a `blocked` or `failed` report. The schedule shows its blocked state; the next run waits for the person's answer or retry.
 - A run is not fired while processing is paused or setup is not configured. After a pause, the same single-late-run rule applies.
 
@@ -167,8 +185,8 @@ A scheduled Ticket is an ordinary open Ticket with one extra scheduling state.
 
 The existing stages keep their meaning: `working` while a run executes, `person/answer` for an open question, `person/blocked` and `person/failed` for a run that needs a person, and `ended` after a stop. A run that is blocked or failed therefore shows `person/blocked` or `person/failed`, not `scheduled`; the clock holds its next run until the person acts.
 
-- The Ticket card and details include `schedule: { period, at, time_zone, next_at, last_run_at, paused }`.
-- The Execution tab gains a **Scheduled** filter next to Open, Working and Waiting. It lists open scheduled Tickets with title, period and next run, requester, last run's result preview, and a stop action.
+- The Ticket card and details include `schedule: { period, every, at, time_zone, next_at, last_run_at, paused }`.
+- The Execution tab gains a **Scheduled** filter next to Open, Working and Waiting. It lists open scheduled Tickets with title, interval and next run, requester, last run's result preview, and a stop action. The interval reads as the person asked it: "every 15 minutes", "every 2 hours", "every 3 days".
 - There is no new top-level panel page. A periodic task is a Ticket, so it belongs where the other Tickets are; the filter is its list.
 - The ticket detail shows the schedule and next run beside the existing authorization. A person can stop the task there, which cancels it.
 - Locale strings (English and Chinese) are added with the UI.
@@ -221,7 +239,8 @@ The prompt must not make the worker responsible for the schedule itself. The hos
 ## Limits
 
 - One runtime schedules; the state-directory lock is the only mutual exclusion. There is no distributed scheduler.
-- v1 supports hourly, daily and weekly periods. Sub-hour intervals and arbitrary cron expressions are out of scope.
+- v1 supports minutely, hourly, daily and weekly periods with an `every` count. Arbitrary cron expressions and a weekday choice for weekly are out of scope. The clock ticks every 30 seconds, so a minutely run can start up to 30 seconds after its scheduled instant.
+- A minutely or hourly `every` that does not divide 60 or 24 produces a shorter last interval before the hour or day. The main Session should prefer a divisor, such as 15 minutes or 2 hours, but the host does not silently round a stated interval.
 - Worker concurrency still bounds execution. A run waits for a free worker slot; a long run delays later runs, and missed boundaries are not backfilled beyond the one late run.
 - A task holds a worker Session and a directory for its life. The operator should expect each open scheduled Ticket to consume the same resources as any open Ticket between runs.
 - The task list has no fixed count limit beyond worker concurrency and the operator's attention; the Scheduled filter shows every open scheduled Ticket.
@@ -251,13 +270,13 @@ The prompt must not make the worker responsible for the schedule itself. The hos
 
 | Area | Cases |
 | --- | --- |
-| Boundary math | Hourly, daily and weekly boundaries in `Asia/Shanghai`, `UTC`, `Asia/Kolkata` and `America/New_York`; DST spring-forward and fall-back; month and year boundaries; invalid `at`, zone and period refused |
-| Accept | A schedule on an explicit accept creates one scheduled Ticket; no schedule on an ordinary accept; an inferred candidate cannot create one; the first `nextAt` is after the accept; an accept without a Channel is refused |
-| Clock | Due run adds exactly one Input, advances `nextAt` and is idempotent on replay; not due does nothing; paused processing and setup do nothing; a busy Ticket waits; a blocked Ticket waits; revalidation failure pauses; a restart fires at most one late run |
+| Boundary math | Minutely, hourly, daily and weekly boundaries with `every` 1, 2 and 15 and a 3-day interval in `Asia/Shanghai`, `UTC`, `Asia/Kolkata` and `America/New_York`; clock-aligned minutely/hourly, including a non-divisor's shorter last interval; wall-clock daily/weekly; DST spring-forward and fall-back; month and year boundaries; invalid `at`, zone, period and `every` refused; `at` on minutely/hourly refused |
+| Accept | A schedule on an explicit accept creates one scheduled Ticket; no schedule on an ordinary accept; an inferred candidate cannot create one; the first `nextAt` follows the interval rule; an accept without a Channel is refused |
+| Clock | Due run adds exactly one Input, advances `nextAt` and is idempotent on replay; a 15-minute, 2-hour and 3-day task fire at the right instants and keep their cadence after a late run; not due does nothing; paused processing and setup do nothing; a busy Ticket waits; a blocked Ticket waits; revalidation failure pauses; a restart fires at most one late run |
 | Ticket lifecycle | A `ready` report keeps a scheduled Ticket open; the same report ends an ordinary Ticket; `dropped` ends and stops the schedule; `blocked` holds; a person's stop ends the Ticket; the stored schedule remains for history |
 | Delivery | A scheduled run's result is sent through the origin Channel; identical text in two runs is sent twice; a dropped Channel does not retarget |
-| Resources and prompts | The Scheduled list shows open scheduled Tickets only; the card includes the next run; the main Session and worker prompts contain the behavior above |
-| Panel | The Scheduled filter, next-run label, last result, stop action, English and Chinese strings; no before/after is required for this proposal, the implementation PR provides it |
+| Resources and prompts | The Scheduled list shows open scheduled Tickets only; the card includes the interval and next run; the main Session and worker prompts contain the behavior above |
+| Panel | The Scheduled filter, interval and next-run labels, last result, stop action, English and Chinese strings; no before/after is required for this proposal, the implementation PR provides it |
 
 ## Implementation plan
 
@@ -285,7 +304,7 @@ Phases 1 and 2 are the generic capability. Phases 3 and 4 can follow in the same
 | # | Question | Recommendation |
 | --- | --- | --- |
 | 1 | Does the first run happen immediately, or at the first boundary? | Immediate: the request also asks for the work now, proves the task, and the acknowledgement names the next run. The person can stop a task created by mistake |
-| 2 | Which periods in v1? | Hourly, daily and weekly. Add interval and weekday options only when a real request needs them |
+| 2 | Which periods and interval rules in v1? | Minutely, hourly, daily and weekly with an `every` count. Minutely and hourly stay clock-aligned, as hourly already was; daily and weekly use a wall-clock `at`. A non-divisor leaves a shorter last interval before the hour or day. Arbitrary cron expressions and a weekday choice remain out of scope |
 | 3 | Which time zone by default? | The runtime's local zone, recorded on the Ticket and stated in the acknowledgement. A stated zone always wins |
 | 4 | May an empty run stay silent? | No in v1: every run reports, so the person can tell the schedule is alive. A per-task "silent when empty" option would be a later change |
 | 5 | How is a schedule changed? | Cancel and create a new task in v1. In-place editing would need a new Mandate or a mutable schedule; that is a separate design decision |
@@ -300,7 +319,7 @@ The design is ready for review on these points in particular:
 
 1. The task is a Ticket with a schedule, not a new Source, service or settings block.
 2. A run is a durable Input to the same worker Session; the Ticket stays open between runs.
-3. Creation is an explicit accept with a `schedule`; the main Session never invents one.
+3. Creation is an explicit accept with a `schedule`; the main Session maps the stated interval, such as 15 minutes, 2 hours or 3 days, to a period and an `every` count, and never invents one.
 4. The first run is immediate; later runs follow the schedule.
 5. The panel lists scheduled Tickets in the Execution tab; a person stops a Ticket to cancel the task.
 
