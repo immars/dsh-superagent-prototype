@@ -125,36 +125,54 @@ function healthOf(name: string): Health {
     detail: 'socket closed' }
 }
 const problemOf_ = (id: string) => [server.setup.problem, server.setup.feishuProblem].find(item => item?.place === id) ?? undefined
+/** The default instance of every kind and the additional instances stored in settings, in the order the host lists them. */
+function instances(): { id: string; kind: SourceKind; label?: string; enabled: boolean; config: Record<string, unknown> }[] {
+  const defaults = KINDS.map(kind => {
+    const stored = server.settings.sources[kind.kind]
+    const parsed = kind.schema.safeParse(stored?.config ?? {})
+    return { id: kind.kind, kind, ...(stored?.label ? { label: stored.label } : {}), enabled: parsed.success && (stored?.enabled ?? true),
+      config: (parsed.success ? parsed.data : kind.schema.parse({})) as Record<string, unknown> }
+  })
+  const extras = Object.entries(server.settings.sources)
+    .filter(([id, stored]) => !KINDS.some(kind => kind.kind === id) && !stored.removed && !!stored.kind
+      && KINDS.some(kind => kind.kind === stored.kind))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, stored]) => {
+      const kind = KINDS.find(item => item.kind === stored.kind)!
+      const parsed = kind.schema.safeParse(stored.config)
+      return { id, kind, ...(stored.label ? { label: stored.label } : {}), enabled: parsed.success && stored.enabled,
+        config: (parsed.success ? parsed.data : kind.schema.parse({})) as Record<string, unknown> }
+    })
+  return [...defaults, ...extras]
+}
 function sourceSettings(): SourceView[] {
-  return KINDS.map(kind => {
-    const config = kind.schema.parse(server.settings.sources[kind.kind]?.config ?? {})
-    const problem = problemOf_(kind.kind)
-    const { admission: _admission, ...part } = server.settings.policy.sources[kind.kind] ?? { allowed: [], admission: {} }
+  return instances().map(({ id, kind, label, enabled, config }) => {
+    const problem = problemOf_(id)
+    const { admission: _admission, ...part } = server.settings.policy.sources[id] ?? { allowed: [], admission: {} }
     const sync = kind.policy?.sync && { label: kind.policy.sync.label, ready: kind.policy.sync.ready(kind.policy.schema.parse(part)),
-      health: server.health[`sync:${kind.kind}`] }
+      health: server.health[`sync:${id}`] }
     const policy = kind.policy && { fields: kind.policy.fields, explicit: kind.policy.explicit, ...kind.policy.rows
       ? { rows: kind.policy.rows(config) } : {}, ...sync ? { sync } : {} }
-    return { id: kind.kind, kind: kind.kind, title: kind.title, description: kind.description, installed: true,
-      value: { enabled: server.settings.sources[kind.kind]?.enabled ?? true, config },
-        revision: server.revisions[`source:${kind.kind}`] ?? 0,
+    return { id, kind: kind.kind, ...(label ? { label } : {}), title: kind.title, description: kind.description, installed: true,
+      value: { enabled, config }, revision: server.revisions[`source:${id}`] ?? 0,
       restarts: SETUP_FIELDS[kind.kind] ?? [], fields: kind.fields, facts: kind.facts?.(resolved()) ?? {},
       labels: kind.kind === 'feishu' ? { oc_team: '团队群', oc_other: '另一个群', ...server.joined } : {}, ...problem ? { problem } : {},
       ...policy ? { policy } : {} }
   })
 }
 function sourceStatuses(): SourceStatusRow[] {
-  return KINDS.map(kind => {
-    const enabled = server.settings.sources[kind.kind]?.enabled ?? true
+  return instances().map(({ id, kind, label, enabled }) => {
     const health = kind.health.map(name => ({ name, ...healthOf(name) }))
-    const problem = problemOf_(kind.kind)
+    const problem = problemOf_(id)
     const state = !enabled ? 'off' : problem || health.some(item => item.state === 'error') ? 'error' : server.setup.problem ? 'setup'
       : health.some(item => item.state === 'starting') ? 'starting' : health.some(item => item.state === 'paused') ? 'paused' : 'ready'
     const feishu = kind.kind === 'feishu'
-    return { id: kind.kind, title: kind.title, installed: true, enabled, state, health, ...problem ? { problem } : {},
+    return { id, kind: kind.kind, ...(label ? { label } : {}), title: kind.title, installed: true, enabled, state, health,
+      ...problem ? { problem } : {},
       stats: { received: feishu ? 12 : 0, filtered: feishu ? 2 : 0, lastAt: '2026-09-23T00:00:00Z' },
       filtered: feishu ? [] : [{ id: 'e9', at: '2026-09-23T00:02:00Z', actor: actor('github', 'someone'), preview: 'looks wrong',
         reason: { code: 'source_disabled' } }],
-      dropped: server.dropped.filter(item => item.channel.source === kind.kind && item.dropped.at >= dayAgo()) }
+      dropped: server.dropped.filter(item => item.channel.source === id && item.dropped.at >= dayAgo()) }
   })
 }
 const stateView = (): StateView => ({

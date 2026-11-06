@@ -17,7 +17,8 @@ export function sourceHealth(sources: SourceRegistry, instance: SourceInstance, 
     const entry = health[name]
     return { name, ...(!entry || (instance.enabled && entry.code === 'sourceOff') ? starting : entry) }
   })
-  return { id: instance.id, title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
+  return { id: instance.id, kind: instance.kind, ...(instance.label ? { label: instance.label } : {}),
+    title: kind?.title ?? { zh: instance.id, en: instance.id }, health: parts }
 }
 export interface SetupState {
   /** Resolved deployment facts; undefined while waiting for initial setup. */
