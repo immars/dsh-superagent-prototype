@@ -7,6 +7,20 @@ import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
 
 export interface Localized { zh: string; en: string }
+/** One display category a Trigger contributes to in a periodic Digest; a Trigger may count toward several. */
+export interface DigestBucket { id: string; label: Localized }
+/**
+ * Optional Source descriptor that lets the periodic Digest group this Source's Triggers without Source-specific digest code.
+ * The Digest counts distinct entities per bucket and all events, so a descriptor may return several buckets for one Trigger.
+ */
+export interface SourceDigest {
+  /** The entity a Trigger belongs to, such as a Jira issue key; repeated events of one entity count once per bucket. */
+  entity(trigger: Trigger): string
+  /** The display group, such as an issue type; an empty result groups the Trigger under its Source. */
+  group?(trigger: Trigger): string | undefined
+  /** The change categories the Trigger counts toward. */
+  buckets(trigger: Trigger): DigestBucket[]
+}
 /** `advanced` folds a rarely changed field (such as a polling tunable) behind the card's Advanced section. */
 interface FieldBase { key: string; label: Localized; hint?: Localized; advanced?: true }
 /**
@@ -104,6 +118,8 @@ export interface SourceKind<C extends Record<string, unknown> = Record<string, u
   channel?: SourceChannel<C>
   /** Bounded context reader for assessments; assessments of a kind without `threadContext` read none. */
   threadContext?: ThreadContext<C>
+  /** Optional periodic-Digest descriptor; a kind without one falls back to counting Triggers under their Thread. */
+  digest?: SourceDigest
   /** Returns the code repository this instance can supply as a Ticket execution target; omitted by kinds that are not code hosts. */
   repository?(instance: SourceInstance): RepositoryTarget | undefined
   /** Maps a search query to candidate Thread keys (such as `github:12`) and Trigger search terms (such as a Feishu `om_` ID). */

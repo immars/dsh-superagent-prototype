@@ -96,15 +96,54 @@ export const ExecutorConfigSchema = z.object({
   blockedCommands: z.array(CommandNameSchema).default([]),
 }).strict()
 export const SourceInstanceSchema = z.object({ kind: z.string().regex(/^[a-z][a-z0-9-]*$/).optional(), label: z.string().trim().max(60).optional(), enabled: z.boolean().default(true), config: z.record(z.string(), z.unknown()).default({}), removed: z.boolean().optional() }).strict()
+/** A time of day as `HH:mm` in a Digest task's time zone. */
+const TimeOfDaySchema = z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'A time of day in HH:mm form')
+/** An IANA time zone such as `Asia/Shanghai`; the host's Intl data decides whether it is known. */
+const TimeZoneSchema = z.string().trim().min(1).refine(value => {
+  try { new Intl.DateTimeFormat('en', { timeZone: value }); return true } catch { return false }
+}, 'An IANA time zone')
+/**
+ * Where a Digest sends its report: the Source channel of a Trigger that is already in the Store. The report replies in
+ * that Trigger's own thread, so the person who asked receives it where they asked and no chat id has to be guessed.
+ */
+export const DigestChannelSchema = z.object({
+  source: z.string().trim().min(1).default('feishu'),
+  triggerId: z.string().trim().min(1),
+}).strict()
+/**
+ * One periodic Digest task: a window of one Source's Triggers, summarized into counts and sent to one channel.
+ * A Source without a Digest descriptor still counts under its Thread; `sources` names Source instances, and empty is every enabled one.
+ */
+export const DigestTaskSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  enabled: z.boolean().default(true),
+  period: z.enum(['hourly', 'daily', 'weekly']).default('hourly'),
+  /** The send time for `daily` (and the anchor for `weekly`, whose weeks start on Monday); `hourly` ignores it. */
+  at: TimeOfDaySchema.default('00:00'),
+  timeZone: TimeZoneSchema.default('Asia/Shanghai'),
+  sources: z.array(z.string().trim().min(1)).max(50).default([]),
+  channel: DigestChannelSchema,
+  language: z.enum(['zh', 'en']).default('zh'),
+  maxTriggers: z.number().int().min(1).max(100_000).default(5000),
+  includeEmpty: z.boolean().default(true),
+  /** The report's leading label, such as the project; it defaults to the project or repository the Triggers name. */
+  title: z.string().trim().max(120).optional(),
+}).strict()
+/** Digest settings: independent periodic reports, each with its own window, recipient and schedule. */
+export const DigestConfigSchema = z.object({ tasks: z.array(DigestTaskSchema).max(50).default([]) }).strict()
+export type DigestChannel = z.infer<typeof DigestChannelSchema>
+export type DigestTask = z.infer<typeof DigestTaskSchema>
+export type DigestConfig = z.infer<typeof DigestConfigSchema>
 export const SettingsSchema = z.object({
   paused: z.boolean().default(false),
   sources: z.record(z.string().regex(/^[a-z][a-z0-9-]*$/), SourceInstanceSchema).default({}),
   policy: PolicyConfigSchema.default(() => PolicyConfigSchema.parse({})),
   eval: EvalConfigSchema.default(() => EvalConfigSchema.parse({})),
   executor: ExecutorConfigSchema.default(() => ExecutorConfigSchema.parse({})),
+  digest: DigestConfigSchema.default(() => DigestConfigSchema.parse({})),
 }).strict()
 export type Settings = z.infer<typeof SettingsSchema>
-export type SettingsBlock = 'policy' | 'eval' | 'executor' | `source:${string}`
+export type SettingsBlock = 'policy' | 'eval' | 'executor' | 'digest' | `source:${string}`
 export type SettingsSave = SettingsBlock | 'pause'
 export type SettingsOrigin = 'panel' | 'tool' | 'sync'
 

@@ -118,6 +118,15 @@ export const jiraKind: SourceKind<JiraConfig> = {
     link: jiraLink,
   },
   threadContext: jiraThreadContext,
+  // A Digest counts one issue once per change kind and keeps the issue type as the display group (the Source filters it to BUG by default).
+  digest: {
+    entity: trigger => String(trigger.meta.issue ?? ''),
+    group: trigger => String(trigger.meta.issueType ?? '').trim() || undefined,
+    buckets: trigger => {
+      const change = String(trigger.meta.change ?? '')
+      return [{ id: change || 'other', label: CHANGE_LABELS[change as JiraChange] ?? { zh: '其他变更', en: 'Other change' } }]
+    },
+  },
   find(query, instance) {
     const issue = /(?:^|\/browse\/|\b)([A-Za-z][A-Za-z0-9]+-\d+)\b/.exec(query)?.[1]
     const id = instance?.id ?? SOURCE

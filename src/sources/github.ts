@@ -64,6 +64,21 @@ export const githubKind: SourceKind<GithubConfig> = {
   health: ['github'],
   channel: { send: sendGithub, link: githubLink },
   threadContext: githubThreadContext,
+  // A Digest counts one Issue or PR once per event kind; the display group separates Issues from pull requests.
+  digest: {
+    entity: trigger => String(trigger.meta.number ?? trigger.threads[0]?.id ?? ''),
+    group: trigger => trigger.meta.isPr === true ? 'Pull request' : 'Issue',
+    buckets: trigger => {
+      const kind = trigger.meta.ci === true ? 'ci' : String(trigger.meta.kind ?? 'event')
+      const labels: Record<string, { zh: string; en: string }> = {
+        issue: { zh: '新建 Issue', en: 'New issue' }, pull: { zh: '新建 PR', en: 'New pull request' },
+        conversation: { zh: '评论', en: 'Comment' }, inline: { zh: '代码评论', en: 'Review comment' },
+        review: { zh: '审查', en: 'Review' }, ci: { zh: 'CI 变化', en: 'CI change' },
+        event: { zh: '其他变更', en: 'Other change' },
+      }
+      return [{ id: kind, label: labels[kind] ?? labels.event! }]
+    },
+  },
   repository: instance => {
     const repository = String(instance.config.repository ?? '')
     return repository ? { instance: instance.id, repository, url: `https://github.com/${repository}` } : undefined

@@ -8,6 +8,17 @@ export function storeReads(db: DatabaseSync) {
   return {
   /** Newest first by arrival (`rowid`) order rather than trigger timestamp. */
   recentTriggers: (offset = 0, limit = 50): Trigger[] => db.prepare('SELECT value FROM trigger ORDER BY rowid DESC LIMIT ? OFFSET ?').all(limit, offset).map(row => JSON.parse(String(row.value)) as Trigger),
+  /**
+   * Triggers whose event time falls in the half-open window `[since, until)`, oldest first, optionally only for the given
+   * Source instances. It reads every stored Trigger, including ones Source scope or admission filtered: a Digest reports
+   * what the Source observed. `limit` caps the read; the caller notices more rows by asking for one more than it shows.
+   */
+  triggerWindow: (options: { since: string; until: string; sources?: readonly string[]; limit: number }): Trigger[] => {
+    const sources = options.sources ?? []
+    const where = ['t.at >= ?', 't.at < ?', ...sources.length ? [`json_extract(t.value, '$.source') IN (${sources.map(() => '?').join(',')})`] : []]
+    return db.prepare(`SELECT t.value FROM trigger t WHERE ${where.join(' AND ')} ORDER BY t.at ASC, t.rowid ASC LIMIT ?`)
+      .all(options.since, options.until, ...sources, options.limit).map(row => JSON.parse(String(row.value)) as Trigger)
+  },
   /** Per-source trigger counts since `since`, plus the latest arrival timestamp across all time. */
   triggerStats: (since: string): Record<string, { received: number; filtered: number; lastAt: string }> => {
     const result: Record<string, { received: number; filtered: number; lastAt: string }> = {}
