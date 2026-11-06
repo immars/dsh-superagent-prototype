@@ -112,6 +112,21 @@ it('states each Source by the first state that holds', () => {
     .toEqual({ feishu: 'setup', github: 'setup' })
 })
 
+it('titles each Source status row with its kind and the instance label of an additional instance', () => {
+  const host = views()
+  const settings = store.settings()
+  store.saveSettings({ ...settings, sources: { ...settings.sources,
+    'github-infra': { kind: 'github', label: 'Infrastructure', enabled: true, config: { repository: 'acme/infra' } },
+    'github-backup': { kind: 'github', enabled: true, config: { repository: 'acme/backup' } } } })
+  expect(sourcesStatus(host, {}, {}).map(({ id, kind, label, title }) => ({ id, kind, ...label ? { label } : {}, title })))
+    .toEqual([
+      { id: 'feishu', kind: 'feishu', title: feishuKind.title },
+      { id: 'github', kind: 'github', title: githubKind.title },
+      { id: 'github-backup', kind: 'github', title: githubKind.title },
+      { id: 'github-infra', kind: 'github', label: 'Infrastructure', title: githubKind.title },
+    ])
+})
+
 it('follows the Ticket\'s stage: a blocked Ticket a person answered since is working, with no retry, note or turn end', () => {
   const host = views()
   const blocked = { state: 'blocked' as const, summary: 'Needs the design file', at: '2026-09-22T00:01:00Z' }

@@ -25,6 +25,16 @@ it('shows each Source\'s state on the Source status and opens its settings from 
   expect(all('.dt-card')[1]!.textContent).toContain('部署检查未通过：没有设置智能体的 GitHub CLI。')
 })
 
+it('titles each Source status row with its kind and the instance label of an additional instance', async () => {
+  server.settings.sources['github-infra'] = { kind: 'github', label: 'Infrastructure', enabled: true,
+    config: { repository: 'acme/infra' } }
+  server.settings.sources['github-backup'] = { kind: 'github', enabled: true, config: { repository: 'acme/backup' } }
+  await mount()
+  await click(zh['tab.source'])
+  expect(all('.dt-form > .dt-list > .dt-row .dt-row-name').map(name => name.textContent))
+    .toEqual(['飞书', 'GitHub', 'GitHub · github-backup', 'GitHub · Infrastructure'])
+})
+
 it('folds more than six chats into a line of their names', async () => {
   const chats = Array.from({ length: 7 }, (_, n) => ({ chatId: n ? `oc_c${n}` : 'oc_team', listen: 'all' as const }))
   server.settings.sources.feishu = { ...server.settings.sources.feishu!, config: { ...server.settings.sources.feishu!.config, chats } }

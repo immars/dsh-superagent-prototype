@@ -8,9 +8,14 @@ import { sourceMark } from './marks.ts'
 import { usePanel, usePanelData } from './provider.tsx'
 import { setupPage, settingsRoute, type Route } from './route.ts'
 import { ConfigHistory, Field, Fields, SourceField, useBlockDraft, useSettings } from './settings-kit.tsx'
-import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, valueLabel, when } from './text.ts'
+import { actorName, errorText, healthText, localized, readableMarkers, reasonLabel, valueLabel, when, type T } from './text.ts'
 import { CheckSetupButton, Hint, LabelValue, LoadState, SetupMessage, StatusHead, When } from './widgets.tsx'
 
+/** Display name of a Source instance: its kind title, plus the instance label (or id) for an installed additional instance. */
+function sourceName(t: T, source: Pick<SourceView, 'id' | 'kind' | 'label' | 'title' | 'installed'>): string {
+  const title = localized(t, source.title)
+  return source.installed && source.id !== source.kind ? `${title} · ${source.label ?? source.id}` : title
+}
 function SourceCard({ source }: { source: SourceView }) {
   const { t, call, notify } = usePanel()
   const { running } = usePanelData()
@@ -29,7 +34,7 @@ function SourceCard({ source }: { source: SourceView }) {
   const changed = (key: string) => String(value.config[key] ?? '') !== String(saved.config[key] ?? '')
   // Saving a modified setup-sensitive field restarts dsh-superagent, interrupting running Assignments.
   const restarts = draft.dirty && source.restarts.some(changed)
-  const name = source.id === source.kind ? localized(t, source.title) : `${localized(t, source.title)} · ${source.label ?? source.id}`
+  const name = sourceName(t, source)
   const description = localized(t, source.description)
   // Hide derived facts for unsaved field edits until the new value is saved.
   const field = (spec: FieldSpec) => <SourceField key={spec.key} field={spec} value={value.config[spec.key]} saved={saved.config[spec.key]}
@@ -161,7 +166,7 @@ function SourceRow({ source }: { source: SourceStatusRow }) {
   return <li className="dt-row">
     <Dot state={dot} label={state} />
     <div className="dt-row-main">
-      <div className="dt-row-title"><span className="dt-row-name">{localized(t, source.title)}</span><span className="dt-status-text"
+      <div className="dt-row-title"><span className="dt-row-name">{sourceName(t, source)}</span><span className="dt-status-text"
         data-state={dot}>{state}</span></div>
       <div className="dt-row-meta">
         {received > 0 && <LabelValue label={t('sourceReceivedLabel')}
