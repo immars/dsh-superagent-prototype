@@ -73,6 +73,8 @@ The prepare command and Executor instructions receive the same execution variabl
 | `DSH_SUPERAGENT_GITHUB_NUMBER`, `DSH_SUPERAGENT_GITHUB_PR_HEAD` | GitHub | The Issue or pull request that started the Ticket, and its head ref when it is a pull request |
 | `DSH_SUPERAGENT_FEISHU_BOT`, `DSH_SUPERAGENT_FEISHU_CHAT` | Feishu | The bot, and the chat that started the Ticket |
 
+A Ticket with no execution target has empty repository variables, so its prepare command must handle that case and create the local directory itself. A GitLab target supplies `DSH_SUPERAGENT_GITLAB_SITE` and `DSH_SUPERAGENT_GITLAB_PROJECT` instead of the GitHub repository variables.
+
 Ticket-specific values come from its directory and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
 Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.

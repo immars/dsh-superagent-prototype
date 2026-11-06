@@ -119,8 +119,12 @@ export class Settings {
       executor: { revision: revision('executor'), value: settings.executor },
       policy: { revision: revision('policy'), rules: rules.map(rule => ({ id: rule.id, name: rule.name, enabled: rule.enabled })),
         allowed: Object.fromEntries(Object.entries(parts).map(([id, part]) => [id, part.allowed.length])), read: 'settings/policy' },
-      sources: sources.instances(settings).map(({ id, kind, enabled, installed }) =>
-        ({ id, kind, enabled, installed, revision: revision(`source:${id}`), read: `settings/source:${id}` })) }
+      sources: sources.instances(settings).map(instance => {
+        // Each repository-capable instance offers its configured repository as a Ticket execution-target candidate.
+        const repository = sources.kindOf(instance.id, settings)?.repository?.(instance)
+        return { id: instance.id, kind: instance.kind, enabled: instance.enabled, installed: instance.installed,
+          ...(repository ? { repository } : {}), revision: revision(`source:${instance.id}`), read: `settings/source:${instance.id}` }
+      }) }
   }
   /**
    * Returns one settings block as accepted by `save` (`policy`, `eval`, `executor`, `pause` holding `{ paused }`, or

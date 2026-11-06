@@ -67,6 +67,8 @@ The token stays in this deployment's local settings and is sent only to the conf
 
 The Source registers `DSH_SUPERAGENT_GITLAB_SITE`, `DSH_SUPERAGENT_GITLAB_PROJECT`, `DSH_SUPERAGENT_GITLAB_KIND`, `DSH_SUPERAGENT_GITLAB_NUMBER` and `DSH_SUPERAGENT_GITLAB_URL` for the Executor. They name the origin work item so a worker knows where the request came from; they do not grant GitLab API access. A Ticket that needs to push a branch or open a merge request needs its own credential outside this Source.
 
+A configured project is also an execution target: the main Session may choose this instance for coding work, and the Ticket then receives the instance's site and project as `DSH_SUPERAGENT_GITLAB_SITE` and `DSH_SUPERAGENT_GITLAB_PROJECT`, even when the request came from another Source. Merge-request binding and a `glab` shim are not implemented, so such a worker needs its own credential to push or open a merge request.
+
 ## Enabling it
 
 The bundle inserts the plugin disabled:
@@ -86,4 +88,4 @@ Enable it in a profile's `cordis.patch.yml` with `disabled: false`, build, resta
 - An edited note is one Trigger per observed version; several edits between two polls collapse into the latest body.
 - The Source observes the whole configured project. There is no per-item subscription; the admission table decides whether an observed item becomes a candidate.
 - Each instance polls one project; watch one project twice or watch two projects with two instances.
-- The session needs a GitLab personal access token. There is no `glab` worker shim and no git credential helper for GitLab in this change, so a worker that must push or open a merge request needs a separate credential.
+- The session needs a GitLab personal access token. There is no `glab` worker shim and no git credential helper for GitLab in this change, so a worker that must push or open a merge request needs a separate credential. A GitLab execution target settles the site and project but does not add merge-request binding.

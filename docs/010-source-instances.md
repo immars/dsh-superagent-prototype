@@ -52,7 +52,7 @@ Some changes below are wider than the visible feature: a run lifecycle, per-inst
 ## Non-goals for this proposal
 
 - **Multiple worker accounts or bots per kind.** GitHub and Feishu each have one installation-level worker command (`gh` and `lark-cli`, including the git credential helper and the worker's `lark-cli` shim). Multiple instances of those kinds therefore share that account and bot. [001 Domain model](001-domain.md) says an instance holds its own bot identity; in this version that identity is the installation bot the instance acts through, not a distinct credential. Per-instance worker accounts and bots are a separate change to the execution environment.
-- **A second repository kind in this change.** GitHub is the first repository-capable kind. The capability interface is designed so a GitLab kind can supply targets later, but giving the GitLab Source repository capability is separate work.
+- **A second repository kind in this change.** GitHub was the first repository-capable kind. The capability interface was extended separately so GitLab also supplies targets; a future repository kind follows the same interface.
 - **More than one execution repository per Ticket.** A Ticket has zero or one target repository. It may subscribe to Threads of several repository instances for context; subscriptions do not add targets.
 - **Sharing a Thread or a Ticket between instances.** A Thread belongs to exactly one instance. Related work across instances is context, not an alias.
 - **A separate process or state directory per instance.** All instances share one Store, lock and runtime.
@@ -381,18 +381,18 @@ The setup code must follow the instance model rather than the kind id. `resolveD
 
 A Ticket has **zero or one execution target**. The target is chosen by the main Session from the Ticket's intent when it accepts the Ticket; it is not inferred from the origin Source and there is no default repository:
 
-- A coding Ticket names a repository-capable Source instance (for example a GitHub instance) in the accept decision.
+- A coding Ticket names a repository-capable Source instance (for example a GitHub or GitLab instance) in the accept decision.
 - A non-coding Ticket omits the target and executes in a local workdir with no repository.
 - A Ticket may subscribe to Threads from several repository instances for context. Subscriptions do not choose or add an execution target.
 
-The target is recorded as an optional `Ticket.target` (not `execution`, which the Executor owns and recomputes) holding `{ source, repository }`. The `orchestrator_route accept` tool gains an optional `execution_target` field: the Source instance id the main Session chose. The Engine validates it against `SourceRegistry.repositories`—the instance must be installed, non-removed, repository-capable and configured—and records the canonical repository. An invalid or non-repository target is refused; there is no fallback.
+The target is recorded as an optional `Ticket.target` (not `execution`, which the Executor owns and recomputes) holding `{ source, repository }`. The `orchestrator_route accept` tool gains an optional `execution_target` field: the Source instance id the main Session chose. The Engine validates it against `SourceRegistry.repositories`—the instance must be installed, non-removed, repository-capable and configured—and records the canonical repository. An invalid or non-repository target is refused; there is no fallback. The main Session reads these candidates from `orchestrator_read settings`, whose source entries list each configured repository.
 
 `Ticket.target` is execution detail, not authorization: it grants no scope and is not part of the Mandate. The target keeps its canonical repository for the life of the Ticket, so editing the instance's configuration later does not move in-flight work. Changing the repository needs a new Ticket.
 
 The Executor and its tools use the target:
 
 - With no target, the worker gets a local directory, no repository environment variables and no pull-request tools. That is the normal case for a non-coding Ticket.
-- With a target, the target kind supplies the repository environment and tools. GitHub uses the shared account, `DSH_SUPERAGENT_GITHUB_REPOSITORY`, pull binding and PR links as today. A future GitLab target would supply its own.
+- With a target, the target kind supplies the repository environment and tools. GitHub uses the shared account, `DSH_SUPERAGENT_GITHUB_REPOSITORY`, pull binding and PR links as today. A GitLab target supplies its site and project; merge-request binding and a `glab` shim are not implemented yet.
 - Resource routes and executor tools resolve the target from the Ticket; they must not fall back to a global repository. A tool that needs a repository refuses clearly when the Ticket has no target.
 - Pull binding is scoped to the target instance and repository. Two repositories can both have PR #12 without binding to each other.
 
@@ -406,7 +406,7 @@ Environment values are selected once per kind, not once per instance. `environme
 2. otherwise the instance that owns the Trigger, when the Trigger's source is of this kind;
 3. otherwise no instance values: the kind's declared variables stay listed with empty values.
 
-This makes a GitHub target authoritative even when the Ticket originated in another GitHub repository or in Feishu/Jira. `environment.values` receives the selected instance and must compare `trigger.source === instance.id` for trigger-specific fields, not `trigger.source === SOURCE`; repository fields come from the selected instance. With no Trigger, the default instance supplies the values for the main Session. A local-only Ticket has no repository target, so repository variables are empty and the prepare command creates a local workdir.
+This makes a repository target authoritative even when the Ticket originated in another repository instance or in Feishu/Jira; a GitLab target also supplies its site and project from its instance configuration. `environment.values` receives the selected instance and must compare `trigger.source === instance.id` for trigger-specific fields, not `trigger.source === SOURCE`; repository fields come from the selected instance, or from `target.repository` when the target names it. With no Trigger, the default instance supplies the values for the main Session. A local-only Ticket has no repository target, so repository variables are empty and the prepare command creates a local workdir.
 
 The Executor also proposes two additive variables, `DSH_SUPERAGENT_SOURCE_INSTANCE` and `DSH_SUPERAGENT_SOURCE_KIND`, naming the Ticket's target (or the origin instance when there is no target). They are empty for the main Session or when neither exists. The PR review left this item open; they are small and can be dropped if unwanted. `declaredVariables` still lists one variable set per kind.
 

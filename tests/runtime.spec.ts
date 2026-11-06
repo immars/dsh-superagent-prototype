@@ -21,6 +21,7 @@ import { SettingsSchema, policyVersion, type SettingsOrigin } from '../src/polic
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { githubKind, pollRound } from '../src/sources/github.ts'
+import { gitlabKind } from '../src/sources/gitlab.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
 import { UserError, key, runningAssignment, said, threadKey, waitsForPerson, type Trigger } from '../src/core/index.ts'
 import { feishuTrigger } from '../src/sources/feishu.ts'
@@ -277,6 +278,30 @@ it('refuses an execution target that is not a configured repository candidate', 
   await expect(route({ ...item, execution_target: 'github-missing' })).rejects.toThrow(/execution target github-missing/)
   await expect(route({ ...item, execution_target: 'github-empty' })).rejects.toThrow(/execution target github-empty/)
   expect(runtime.store.tickets.list()).toEqual([])
+})
+
+it('accepts a GitLab project target and runs the worker with its site and project', async () => {
+  runtime.sources.register(gitlabKind)
+  const settings = runtime.store.settings()
+  runtime.store.saveSettings({ ...settings, sources: { ...settings.sources,
+    gitlab: { enabled: true, config: { site: 'https://gitlab.example.com', project: 'group/widgets', token: 't0ken', agentAccount: 'agent-bot' } } } })
+  const trigger = feishu('63', '@bot 修一下 GitLab 的登录页')
+  await receive(trigger)
+  // The main Session sees each configured repository as a candidate in the settings resource.
+  const candidates = await runTool(runtime.masterId, 'orchestrator_read', { resource: 'settings' }) as { sources: Record<string, unknown>[] }
+  expect(candidates.sources).toContainEqual(expect.objectContaining({ id: 'gitlab',
+    repository: { instance: 'gitlab', repository: 'group/widgets', url: 'https://gitlab.example.com/group/widgets' } }))
+  const result = await route({ kind: 'accept', trigger_id: trigger.id, title: '修复 GitLab 登录页', worktree_name: 'fix-gitlab-login',
+    execution_target: 'gitlab', acknowledgement: '收到，修复 GitLab 登录页。' })
+  const ticket = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  expect(result).toMatchObject({ execution_target: { source: 'gitlab', repository: 'group/widgets' } })
+  expect(ticket).toMatchObject({ target: { source: 'gitlab', repository: 'group/widgets' }, targetResolved: true })
+  const environment = Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))
+  expect(environment).toMatchObject({ DSH_SUPERAGENT_GITLAB_SITE: 'https://gitlab.example.com',
+    DSH_SUPERAGENT_GITLAB_PROJECT: 'group/widgets', DSH_SUPERAGENT_GITHUB_REPOSITORY: '' })
+  // A GitLab target has no GitHub pull-request tool, so its worker reports without a pull request.
+  await expect(runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'progress', summary: 'no PR', pr_number: 42 }))
+    .rejects.toThrow(/not a GitHub repository/)
 })
 
 it('runs a ticket with no target locally, with empty repository variables and no pull-request tools', async () => {

@@ -46,7 +46,7 @@ Ask in this order, one per message, following the flow of work in [docs/001-doma
 
 **Execution: what the agent does with a Ticket.**
 
-7. **Checkout.** Which local clone of the repository should each Ticket check out from? [A new clone under `~/src/<name>`.]
+7. **Checkout.** Which local clone of the repository should a coding Ticket check out from? [A new clone under `~/src/<name>`. A Ticket may have no repository target, so its prepare command must also create an empty directory for that case.]
 8. **Commit identity.** Who should the agent's commits name as author? [The agent account, so its work is visibly its own.] Another identity, such as the operator's, goes into the Delivery requirements prompt section.
 9. **Auto-merge.** Should the agent enable auto-merge on its own pull requests once they are ready and approved? [No: people merge until the agent's pull requests have been right for a while.] The agent never enables it as the agent account, so with yes it needs the GitHub CLI of another account that may merge: ask the operator to sign one in among the operator steps, and name it in Delivery requirements. With no, remove the auto-merge paragraph from Delivery requirements.
 

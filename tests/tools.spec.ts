@@ -34,7 +34,8 @@ it('reads the lists, a ticket, a decision, the settings, the prompts and the mod
   // The settings name each block's revision and hold the small blocks; a block reads whole by the name a save takes.
   const settings = await read('settings')
   expect(settings).toMatchObject({ eval: { value: { mode: 'auto' } }, policy: { revision: expect.any(Number), allowed: { feishu: 1, github: 1 }, read: 'settings/policy' },
-    pause: { value: { paused: false } }, sources: expect.arrayContaining([expect.objectContaining({ id: 'github', read: 'settings/source:github' })]) })
+    pause: { value: { paused: false } }, sources: expect.arrayContaining([expect.objectContaining({ id: 'github', read: 'settings/source:github',
+      repository: { instance: 'github', repository: 'acme/widgets', url: 'https://github.com/acme/widgets' } })]) })
   expect(JSON.stringify(settings)).not.toContain('ou_alice')
   for (const block of ['policy', 'eval', 'executor', 'pause', 'source:github']) {
     const page = await read(`settings/${block}`) as { text: string }
