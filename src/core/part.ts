@@ -1,7 +1,7 @@
 /** Shared base class and configuration for Engine domain parts. */
 import { UserError } from './errors.ts'
 import { followupOwners, reached, threadKey } from './model.ts'
-import type { Thread, ThreadRef, Ticket, Trigger } from './model.ts'
+import type { Thread, ThreadRef, Ticket, Trigger, ExecutionTarget } from './model.ts'
 import type { Assessor, AssessmentOutcome, DomainEvent, DomainEvents, Executor, Outbox, Policy, Repositories, SourceScope } from './ports.ts'
 
 export interface EngineOptions {
@@ -13,6 +13,11 @@ export interface EngineOptions {
   executor: Executor
   outbox: Outbox
   prepareTicket?: (ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>) => Ticket
+  /**
+   * Resolves a repository-capable Source instance an accept named to its canonical execution target, or undefined when
+   * the instance is not an installed, non-removed, configured repository candidate.
+   */
+  executionTarget?: (source: string) => ExecutionTarget | undefined
   now?: () => string
   emit?: (event: DomainEvent) => void
 }

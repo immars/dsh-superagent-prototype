@@ -1,7 +1,7 @@
 /** SourceKind plugin contract: configuration schema, UI form fields, policy integration, channel adapter, and thread context reader. */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { z } from 'zod'
-import type { OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
+import type { ExecutionTarget, OutboundMessage, ScopeResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SourceContext, SourceHost } from './host.ts'
@@ -24,7 +24,8 @@ export type FieldSpec =
 export interface VariableSpec { key: string; description: Localized }
 /** A code repository a Source instance can supply as a Ticket's execution target. */
 export interface RepositoryTarget { instance: string; repository: string; label?: Localized; url?: string }
-export interface EnvironmentInput<C> { deployment: Deployment; config: C; trigger?: Trigger }
+/** The selected instance supplies a kind's environment values; `target` is the Ticket's execution target when it chose this kind. */
+export interface EnvironmentInput<C extends Record<string, unknown> = Record<string, unknown>> { deployment: Deployment; config: C; instance: SourceInstance<C>; target?: ExecutionTarget; trigger?: Trigger }
 export interface AdmissionRowView { id: string; label: Localized | string; note: Localized; cells: { listedUnaddressed: boolean; unlistedAddressed: boolean; unlistedUnaddressed: boolean } }
 /** Policy extension for a source kind, defining allowed senders, admission table rows, and optional external roster sync. */
 export interface SourcePolicyPart<P extends Record<string, unknown>> {

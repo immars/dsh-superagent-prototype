@@ -103,9 +103,13 @@ export const githubKind: SourceKind<GithubConfig> = {
       { key: 'DSH_SUPERAGENT_GITHUB_NUMBER', description: { zh: '接下工单的 Issue 或 PR 编号；工单不是从 GitHub 来的时为空', en: 'Number of the Issue or PR that started the ticket; empty when the ticket did not start on GitHub' } },
       { key: 'DSH_SUPERAGENT_GITHUB_PR_HEAD', description: { zh: '接下工单的 PR 的 head 引用 refs/pull/<编号>/head；不是 PR 时为空', en: 'Head ref refs/pull/<number>/head of the PR that started the ticket; empty when it was not a PR' } },
     ],
-    values: ({ deployment, trigger }) => {
-      const number = trigger?.threads[0]?.source === SOURCE ? Number(trigger.meta.number) || 0 : 0
-      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: deployment.repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: deployment.github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: deployment.github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
+    values: ({ deployment, config, trigger, instance, target }) => {
+      // Repository fields come from the selected instance: the Ticket target is authoritative, the default Source keeps
+      // the resolved deployment repository, and another instance supplies its own configured repository.
+      const repository = target?.source === instance.id ? target.repository
+        : instance.id === SOURCE ? deployment.repository : String(config.repository ?? '')
+      const number = trigger && trigger.threads[0]?.source === instance.id ? Number(trigger.meta.number) || 0 : 0
+      return { DSH_SUPERAGENT_GITHUB_REPOSITORY: repository, DSH_SUPERAGENT_GITHUB_ACCOUNT: deployment.github.login, DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL: deployment.github.noreply, DSH_SUPERAGENT_GITHUB_NUMBER: number ? String(number) : '',
         DSH_SUPERAGENT_GITHUB_PR_HEAD: number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : '' }
     },
   },
@@ -408,7 +412,9 @@ async function intakeComments(ctx: SourceContext, ref: PullRef, since: string, r
   }
 }
 export async function pollTicketPulls(ctx: SourceContext, signal?: AbortSignal, round = newRound(signal)): Promise<void> {
-  const numbers = [...new Set(ctx.tickets.open().flatMap(ticket => pullsOf(ticket, true)))]
+  // A ticket with a target follows PRs in its target instance's repository; a legacy ticket without one keeps the old behavior.
+  const numbers = [...new Set(ctx.tickets.open().filter(ticket => !ticket.target || ticket.target.source === ctx.instance.id)
+    .flatMap(ticket => pullsOf(ticket, true)))]
   for (const number of numbers) {
     if (stopped(ctx, round)) return
     try {
