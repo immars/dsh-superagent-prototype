@@ -157,8 +157,12 @@ describe('jira translation', () => {
     expect(jiraTime('2026-11-04T10:00:00.000+0000')).toBe('2026-11-04T10:00:00.000Z')
   })
   it('builds the JQL for the project, cursor, issue types and extra filter', () => {
-    const jql = jiraJql({ project: 'ABC', issueTypes: 'Bug, Task', jql: 'labels = agent' }, '2026-11-04T10:05:30.000Z')
-    expect(jql).toBe('project = "ABC" AND updated >= "2026-11-04 10:04 UTC" AND issuetype in ("Bug", "Task") AND (labels = agent) ORDER BY updated ASC')
+    const query = { project: 'ABC', issueTypes: 'Bug, Task', jql: 'labels = agent' }
+    expect(jiraJql(query, '2026-11-04T10:05:30.000Z'))
+      .toBe('project = "ABC" AND updated >= "2026-11-04 10:04 UTC" AND issuetype in ("Bug", "Task") AND (labels = agent) ORDER BY updated ASC')
+    // Server/DC rejects the UTC suffix and reads a bare date-time in the user's timezone.
+    expect(jiraJql(query, '2026-11-04T10:05:30.000Z', { platform: 'server', timeZone: 'Asia/Shanghai' }))
+      .toBe('project = "ABC" AND updated >= "2026-11-04 18:04" AND issuetype in ("Bug", "Task") AND (labels = agent) ORDER BY updated ASC')
   })
 })
 
@@ -212,6 +216,7 @@ describe('jira polling', () => {
     const h = host()
     const value = issue(), historyValue = history()
     const calls = serve({
+      'GET /rest/api/2/myself': () => ({ name: 'lisen.mu', timeZone: 'Asia/Shanghai' }),
       'GET /rest/api/2/search': () => ({ issues: [value], startAt: 0, total: 1 }),
       'GET /rest/api/2/issue/ABC-1': () => ({ ...value, changelog: { startAt: 0, maxResults: 1, total: 1, histories: [historyValue] } }),
     })
@@ -219,8 +224,8 @@ describe('jira polling', () => {
     const result = await pollJira(h.ctx, config, new AbortController().signal)
     expect(result).toEqual({ read: 2, unreadable: 0 })
     expect(h.receive.mock.calls.map(call => call[0].meta.change).sort()).toEqual(['created', 'transitioned'])
-    expect(calls.map(call => call.url.pathname)).toEqual(['/rest/api/2/search', '/rest/api/2/issue/ABC-1'])
-    expect(calls[1]!.url.searchParams.get('expand')).toBe('changelog')
+    expect(calls.map(call => call.url.pathname)).toEqual(['/rest/api/2/myself', '/rest/api/2/search', '/rest/api/2/issue/ABC-1'])
+    expect(calls[2]!.url.searchParams.get('expand')).toBe('changelog')
     expect(calls.some(call => call.url.pathname.endsWith('/changelog'))).toBe(false)
   })
   it('does not read the changelog or comments when only new issues are listened to', async () => {

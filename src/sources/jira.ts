@@ -214,7 +214,9 @@ export async function pollJira(ctx: SourceContext, config: JiraConfig, signal: A
   const previous = ctx.state.get(KV.jira.cursor(ctx.instance.id))
   const since = previous?.scope === scope ? previous.since : cursorAt(started)
   const client = new JiraClient(config, signal)
-  const found = await client.search(jiraJql(config, since))
+  // Server/DC JQL rejects an explicit UTC suffix; it interprets a bare date-time in the user's timezone.
+  const timeZone = config.platform === 'server' ? await client.timeZone() : 'UTC'
+  const found = await client.search(jiraJql(config, since, { platform: config.platform, timeZone }))
   const changes = ENABLED(config)
   const types = TYPES(config)
   let read = 0
