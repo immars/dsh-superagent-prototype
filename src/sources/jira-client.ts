@@ -20,7 +20,7 @@ export class JiraError extends Error {
 }
 export const JiraUserSchema = z.looseObject({
   accountId: z.string().nullish(), name: z.string().nullish(), displayName: z.string().nullish(),
-  emailAddress: z.string().nullish(), accountType: z.string().nullish(),
+  emailAddress: z.string().nullish(), accountType: z.string().nullish(), timeZone: z.string().nullish(),
 }).nullish()
 export type JiraUser = z.infer<typeof JiraUserSchema>
 const JiraIssueFieldsSchema = z.looseObject({
@@ -104,17 +104,31 @@ export function adfDocument(text: string): unknown {
   })
   return { type: 'doc', version: 1, content: paragraphs.length ? paragraphs : [{ type: 'paragraph', content: [{ type: 'text', text: ' ' }] }] }
 }
-/** Formats a cursor as a JQL UTC literal; the minute floor and one-minute overlap make late writes safe because Trigger ids deduplicate. */
-export function jqlTime(iso: string): string {
+/**
+ * Formats a cursor as a JQL literal. Cloud accepts an explicit UTC suffix; Server/DC accepts only a local
+ * date-time, interpreted in the authenticated user's timezone, so the Source passes that timezone for it.
+ * The minute floor and one-minute overlap make late writes safe because Trigger ids deduplicate.
+ */
+export function jqlTime(iso: string, platform: 'cloud' | 'server' = 'cloud', timeZone = 'UTC'): string {
   const time = Date.parse(iso)
   const date = new Date(Number.isFinite(time) ? time - 60_000 : Date.now())
   const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`
+  if (platform === 'cloud') {
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())} UTC`
+  }
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date)
+  const part = (type: string): string => parts.find(item => item.type === type)?.value ?? ''
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`
 }
 const quote = (value: string): string => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
-/** Builds the JQL for one poll: the project, the cursor, optional issue types and the operator's extra JQL. */
-export function jiraJql(query: JiraQuery, since: string): string {
-  const clauses = [`project = ${quote(query.project)}`, `updated >= "${jqlTime(since)}"`]
+/**
+ * Builds the JQL for one poll: the project, the cursor, optional issue types and the operator's extra JQL.
+ * A Server/DC poll passes the user's `timeZone`; Cloud keeps the UTC literal.
+ */
+export function jiraJql(query: JiraQuery, since: string,
+  options: { platform?: 'cloud' | 'server'; timeZone?: string } = {}): string {
+  const clauses = [`project = ${quote(query.project)}`, `updated >= "${jqlTime(since, options.platform ?? 'cloud', options.timeZone ?? 'UTC')}"`]
   const types = query.issueTypes.split(',').map(type => type.trim()).filter(Boolean)
   if (types.length) clauses.push(`issuetype in (${types.map(quote).join(', ')})`)
   if (query.jql) clauses.push(`(${query.jql})`)
@@ -137,6 +151,7 @@ const FIELDS = 'summary,description,status,issuetype,priority,assignee,reporter,
  * call's abort signal; failures carry Jira's HTTP status so a Channel can settle a deleted issue as gone.
  */
 export class JiraClient {
+  private zone?: string
   constructor(private readonly connection: JiraConnection, private readonly signal?: AbortSignal) {}
   private get prefix(): string { return `/rest/api/${this.connection.platform === 'server' ? '2' : '3'}` }
   private url(path: string, query: Record<string, string | number | undefined> = {}): string {
@@ -170,6 +185,13 @@ export class JiraClient {
     try { value = text ? JSON.parse(text) : {} }
     catch { throw new JiraError(`Jira returned unreadable JSON (HTTP ${response.status})`, response.status) }
     return schema.parse(value)
+  }
+  /** The authenticated user's timezone, which JQL uses for a Server/DC date without an explicit zone. */
+  async timeZone(): Promise<string> {
+    if (this.zone) return this.zone
+    const me = await this.request(JiraUserSchema, 'GET', '/myself')
+    this.zone = me?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone
+    return this.zone
   }
   /** Reads every issue matching `jql`, oldest update first, skipping malformed items. */
   async search(jql: string): Promise<SearchResult> {
