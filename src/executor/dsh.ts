@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { mkdir, rmdir, stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import { key, latestAssignment, latestReport, liveTicket, runningAssignment, scheduleText, threadKey, waitsForPerson } from '../core/index.ts'
 import type { AssessmentOutcome, Assignment, EngineForExecutor, Execution, ExecutionTarget, Executor, Mandate, PolicyEffect, Ticket, TicketInput, Trigger }
   from '../core/index.ts'
@@ -18,6 +18,7 @@ import { WorktreeNameSchema } from '../app/assessment.ts'
 import { resultRelay } from '../app/notices.ts'
 import type { HealthEntry } from '../infra/health.ts'
 import { cancelled, collectJob, killJobs, runningJobs, stopBackground, stopSubagents, until, untilQuiet } from './background.ts'
+import { chooseWorkspace, workspaceTarget } from './workspaces.ts'
 
 const now = (): string => new Date().toISOString()
 /** Returns the worker session ID (`worker-<ticketId>`) for a ticket. */
@@ -95,10 +96,11 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
     + 'internal to one module within the accepted rule scope. If it requires public-interface or behavior changes, new interaction, product '
     + 'decisions or clarification, stop and report dropped; do not expand scope.' : ''
 }
-/** Builds a newly accepted ticket's Execution metadata: its worktree name, workspace directory, and assignment text. */
+/** Builds a newly accepted ticket's Execution metadata: its ticket name, workspace directory, and assignment text. */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
-  stateDir: string): Execution {
+  stateDir: string, tickets: readonly Ticket[] = []): Execution {
   const name = ticketWorktreeName(outcome.name ?? '', ticket.id)
+  const directory = chooseWorkspace(executionRoot(settings, stateDir), workspaceTarget(ticket.target), tickets, outcome.name ?? '')
   const source = ticket.origin.triggerId
   const note = outcome.note ? `\nRouting note (not the source request): ${outcome.note}` : ''
   const ruleIds = ticket.mandate.basis.rules
@@ -112,7 +114,7 @@ export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutco
   const assignment = ticket.mandate.strength === 'inferred' && ruleIds
     ? `Proactively accepted under ${ruleIds.join(', ')}. Scope: ${outcome.scope}.${precedence}${note}${schedule}`
     : `${note}${schedule}`.trim()
-  return { name, directory: join(executionRoot(settings, stateDir), name), assignment }
+  return { name, directory, assignment }
 }
 /** Character limits for inline assignment and trigger text in worker messages; longer text is read via its resource. */
 const ASSIGNMENT_CHARS = 1500, TRIGGER_CHARS = 600
@@ -239,6 +241,8 @@ export class DshExecutor implements Executor {
   private readonly personal = new Map<string, string>()
   /** The timers of workers that go on after a passing failure, which dispose clears. */
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
+  /** The ticket working in each workspace directory, so only one ticket works in a workspace at a time. */
+  private readonly working = new Map<string, string>()
   /** Registers the `launch` and `delivery` effect handlers; both are held (concurrency limit 0) while processing is paused. */
   constructor(private readonly host: ExecutorHost) {
     this.slots = new WorkerSlots(() => host.store.tickets.open().filter(ticket => this.running(ticket)).map(ticket => ticket.id),
@@ -249,9 +253,9 @@ export class DshExecutor implements Executor {
     // Failed input deliveries are recorded on the ticket itself rather than reported through the `delivery` effect health entry (`quiet: true`).
     host.effects.handle('delivery', payload => this.deliverQueued(payload.ticketId), { limit: () => host.paused() ? 0 : 4, quiet: true })
   }
-  /** Populates a newly accepted ticket's `execution` attributes (worktree name, workspace directory, and assignment text). */
+  /** Populates a newly accepted ticket's `execution` attributes (ticket name, workspace directory, and assignment text). */
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Ticket {
-    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir) }
+    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir, this.host.store.tickets.list()) }
   }
   /**
    * Records a pre-upgrade Ticket's execution target once, before its first launch: `targetResolved` keeps a local-only
@@ -271,26 +275,85 @@ export class DshExecutor implements Executor {
     })
   }
   /**
-   * Runs the configured `executor.prepare` command for a new ticket workspace in its parent directory with the ticket's
-   * execution environment variables, then verifies the directory as the worker sees it.
+   * The ticket whose checkout the workspace holds: the one whose preparation there is most recent. A workspace prepared
+   * before this version recorded preparation belongs to the ticket whose latest Assignment started there most recently.
+   */
+  private preparedFor(directory: string): string | undefined {
+    let owner: string | undefined, at = ''
+    for (const ticket of this.host.store.tickets.list()) {
+      if (ticket.execution?.directory !== directory) continue
+      const prepared = ticket.execution.preparedAt
+      if (prepared && prepared > at) { at = prepared; owner = ticket.id }
+    }
+    if (owner) return owner
+    for (const ticket of this.host.store.tickets.list()) {
+      if (ticket.execution?.directory !== directory) continue
+      const started = ticket.assignments.map(assignment => assignment.startedAt ?? '').sort().at(-1) ?? ''
+      if (started && started > at) { at = started; owner = ticket.id }
+    }
+    return owner
+  }
+  /** Records that `ticketId`'s workspace now holds its checkout, which a later retry or resume reuses without preparing again. */
+  private recordPrepared(ticketId: string): void {
+    this.host.store.atomic(() => {
+      const ticket = this.host.store.tickets.get(ticketId)
+      if (!ticket?.execution) return
+      ticket.execution.preparedAt = now()
+      this.host.store.tickets.save(ticket)
+    })
+  }
+  /**
+   * Brings `ticket`'s workspace to its checkout before it works there. The workspace is left alone when it already holds
+   * this ticket's checkout, such as after a retry; a workspace another ticket prepared is prepared again, with
+   * `DSH_SUPERAGENT_REUSED` set, so the prepare command can return the shared checkout to this ticket's state.
+   * @throws PrepareFailed when the prepare command fails.
+   */
+  private async prepareFor(ticket: Ticket): Promise<void> {
+    const directory = ticket.execution?.directory ?? ''
+    const reused = await stat(directory).then(() => true, () => false)
+    if (reused && this.preparedFor(directory) === ticket.id) return
+    await this.prepareDirectory(ticket, reused)
+    this.recordPrepared(ticket.id)
+  }
+  /**
+   * Runs the configured `executor.prepare` command for a ticket workspace in its parent directory with the ticket's
+   * execution environment variables, then verifies the directory as the worker sees it. `reused` marks a workspace that
+   * already exists, which the command is told through `DSH_SUPERAGENT_REUSED`.
    * A failed prepare command throws `PrepareFailed`, which is not retried automatically; an empty directory it left is removed, a non-empty one kept.
    * @throws PrepareFailed with the command's output when the prepare command fails.
    */
-  private async prepareDirectory(ticket: Ticket): Promise<void> {
+  private async prepareDirectory(ticket: Ticket, reused: boolean): Promise<void> {
     const directory = ticket.execution?.directory ?? ''
     await mkdir(dirname(directory), { recursive: true })
     const command = this.host.store.settings().executor.prepare.trim()
     const env = Object.fromEntries(this.host.environment(ticket).map(variable => [variable.key, variable.value]))
+    env.DSH_SUPERAGENT_REUSED = reused ? '1' : ''
     // Enforce a timeout so a hung prepare command (such as on a credential prompt) fails the ticket instead of holding a worker slot indefinitely.
     const signal = AbortSignal.any([this.host.lifetime, AbortSignal.timeout(PREPARE_TIMEOUT_MS)])
     if (command) await runAsWorker(this.host.context.subprocess, ['sh', '-c', command], dirname(directory), signal, env)
       .catch(async (error: unknown) => {
         // Remove an empty directory left by a failed prepare command so a later retry does not treat it as already prepared.
         await rmdir(directory).catch(() => { /* Absent, or holding what the command wrote, which the output explains. */ })
-        throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}`)
+        const hint = reused ? ' The workspace already existed: the prepare command must return it to this ticket\'s state.' : ''
+        throw new PrepareFailed(`The prepare command failed: ${error instanceof Error ? error.message : String(error)}${hint}`)
       })
     await mkdir(directory, { recursive: true })
     await verifyDirectory(directory, this.host.context.subprocess, this.host.lifetime)
+  }
+  /**
+   * Claims the ticket's workspace for its worker, unless another ticket works there. The claim lasts until the worker's
+   * turn ends, so a shared workspace never runs two tickets at once.
+   */
+  private claim(ticket: Ticket): boolean {
+    const directory = ticket.execution?.directory ?? ''
+    const holder = this.working.get(directory)
+    if (holder !== undefined && holder !== ticket.id) return false
+    this.working.set(directory, ticket.id)
+    return true
+  }
+  /** Frees the workspace a ticket's worker held once its turn ends. */
+  private release(ticketId: string): void {
+    for (const [directory, holder] of this.working) if (holder === ticketId) this.working.delete(directory)
   }
   /** Enqueues a `launch` effect for an accepted or resumed assignment; launches start in queue order as worker slots free up. */
   start(ticket: Ticket, assignment: Assignment): void {
@@ -304,7 +367,8 @@ export class DshExecutor implements Executor {
     const assignment = ticket && latestAssignment(ticket)
     if (!ticket || !liveTicket(ticket) || assignment?.id !== assignmentId || assignment.state !== 'pending') return
     this.slots.reserve(ticketId, 'launch')
-    try { await this.launch(ticket, assignment); this.transient.delete(`launch:${assignmentId}`) }
+    let started = false
+    try { started = await this.launch(ticket, assignment); this.transient.delete(`launch:${assignmentId}`) }
     catch (error) {
       // Shutdown or pause re-queues the launch for resume, and transient network/provider errors retry with backoff.
       // A failed prepare command is not retried automatically because an existing directory counts as prepared, so retrying
@@ -313,7 +377,10 @@ export class DshExecutor implements Executor {
       if (this.host.closing() || error instanceof Later) throw error
       if (!(error instanceof PrepareFailed) && this.retries(`launch:${assignmentId}`, error)) throw error
       this.launchFailed(ticketId, assignmentId, error)
-    } finally { this.slots.free(ticketId) }
+    } finally {
+      if (!started) this.release(ticketId)
+      this.slots.free(ticketId)
+    }
   }
   /**
    * Delivers queued inputs to a running assignment one by one, re-reading ticket state before each delivery so delivery
@@ -325,7 +392,7 @@ export class DshExecutor implements Executor {
     const first = this.host.store.tickets.get(ticketId)
     const target = first && liveTicket(first) ? runningAssignment(first) : undefined
     if (!first || !target || !first.undelivered.length) return
-    let woken = false
+    let woken = false, claimed = false, delivered = false
     try {
       for (;;) {
         const ticket = this.host.store.tickets.get(ticketId)
@@ -335,6 +402,11 @@ export class DshExecutor implements Executor {
         // Waking an idle worker reserves a slot (including the extra slot reserved for human follow-ups).
         const sessionId = workerSessionId(ticketId)
         if (!woken && !this.running(ticket)) {
+          // A shared workspace never runs two tickets at once: wait for the ticket that works there now.
+          if (!this.claim(ticket)) throw new Later('Another ticket is working in this workspace')
+          claimed = true
+          // A workspace another ticket prepared is returned to this ticket's checkout before its worker wakes.
+          await this.prepareFor(ticket)
           // A person's message wakes its worker ahead of new launches, in the slot kept for it.
           const person = ticket.undelivered.some(id => fromPerson(ticket.inputs.find(item => item.id === id)))
           this.slots.reserve(ticketId, person ? 'person' : 'wake')
@@ -347,6 +419,7 @@ export class DshExecutor implements Executor {
             await this.host.sessions.ensure(sessionId, ticket.execution?.directory ?? '', ticket.title, 'worker')
           }
           if (input) await this.deliverInput(ticket, assignment, input)
+          delivered = true
         } catch (error) {
           if (this.host.closing() || error instanceof Later) throw error
           const current = this.host.store.tickets.get(ticketId)
@@ -356,7 +429,14 @@ export class DshExecutor implements Executor {
         }
         this.host.engine.inputsDelivered(ticketId, assignment.id, [inputId])
       }
-    } finally { if (woken) this.slots.free(ticketId) }
+    } catch (error) {
+      // A failed prepare fails the ticket instead of the delivery; the ticket waits for a person or an explicit retry.
+      if (error instanceof PrepareFailed) { this.failed(ticketId, String(error)); return }
+      throw error
+    } finally {
+      if (claimed && !delivered) this.release(ticketId)
+      if (woken) this.slots.free(ticketId)
+    }
   }
   private async deliverInput(ticket: Ticket, assignment: Assignment, input: TicketInput): Promise<void> {
     // Re-check right before session delivery because the ticket may have ended while awaiting `sourceLink`.
@@ -388,6 +468,7 @@ export class DshExecutor implements Executor {
    */
   stop(ticket: Ticket, assignment: Assignment, reason: string): void {
     this.transient.delete(assignment.id); this.transient.delete(`launch:${assignment.id}`)
+    this.release(ticket.id)
     const report = assignment.report
     const busy = !!assignment.deliveredAt && !!report && assignment.deliveredAt >= report.at
     const ownTurn = (report?.state === 'ready' || report?.state === 'dropped') && !busy
@@ -447,13 +528,14 @@ export class DshExecutor implements Executor {
   }
   /** Records a `failed` report on the ticket and relays the failure to the main Session in one transaction. */
   private failed(ticketId: string, summary: string): void {
+    this.release(ticketId)
     this.host.store.atomic(() => {
       const updated = this.host.engine.report(ticketId, { state: 'failed', summary })
       this.relay(resultRelay(updated, 'failed', summary))
     })
   }
   private relay({ id, text }: { id: string; text: string }): void { this.host.sessions.relay(id, text) }
-  private async launch(ticket: Ticket, assignment: Assignment): Promise<void> {
+  private async launch(ticket: Ticket, assignment: Assignment): Promise<boolean> {
     const current = () => {
       if (this.host.closing()) throw new Error('dsh-superagent is stopping')
       if (this.host.paused()) throw new Later('Processing is paused')
@@ -462,24 +544,23 @@ export class DshExecutor implements Executor {
     }
     const source = sourceTrigger(this.host, ticket)
     const workspace = ticket.execution?.directory ?? ''
-    if (!current()) return
+    if (!current()) return false
+    // A workspace is shared over time: only one ticket's worker works in it at a time.
+    if (!this.claim(ticket)) throw new Later('Another ticket is working in this workspace')
     // A Ticket accepted before execution targets existed resolves one once, before its prepare command sees the environment.
     if (!ticket.targetResolved) {
       ticket = this.recordTarget(ticket)
-      if (!current()) return
+      if (!current()) return false
     }
-    // Prepare the workspace directory once; an existing directory counts as already prepared, including worktrees created before `prepare` commands existed.
-    if (!await stat(workspace).then(() => true, () => false)) {
-      await this.prepareDirectory(ticket)
-      if (!current()) return
-    }
-    if (!current()) return
+    // Prepare the workspace unless it already holds this ticket's checkout; a reused workspace is returned to it first.
+    await this.prepareFor(ticket)
+    if (!current()) return false
     const sessionId = workerSessionId(ticket.id)
     const agent = await this.host.sessions.ensure(sessionId, workspace, ticket.title, 'worker')
-    if (!current()) return
+    if (!current()) return false
     // The background work of the Assignment this one replaces stops first, so its end does not clear this one's message.
     await this.stopped(ticket.id)
-    if (!current()) return
+    if (!current()) return false
     // A message put back for this Assignment may still wait in the Session, kept by a restart's cancel or persisted across a
     // crash, where this launch's message would take it into a step beside the copy delivered next: that copy is the only one.
     for (const id of this.host.store.tickets.get(ticket.id)?.undelivered ?? []) agent.inbox.remove(this.host.sessions.promptedId(id))
@@ -488,12 +569,12 @@ export class DshExecutor implements Executor {
     const first = `assignment:${ticket.id}`
     const later = ticket.assignments.length > 1
     const told = later && await this.host.sessions.holds(sessionId, first)
-    if (!current()) return
+    if (!current()) return false
     const retried = ticket.assignments.at(-2)?.endedReason === 'retried' ? { note: RETRIED } : {}
     const assignmentText = ticket.execution?.assignment ?? ''
     const { text: brief, chars, read } = capped(assignmentText, ASSIGNMENT_CHARS, `ticket/${ticket.id}/assignment`)
     const card = told || !source ? undefined : await this.triggerCard(ticket, source.id)
-    if (!current()) return
+    if (!current()) return false
     const batch = told ? [] : batchOf(this.host, ticket).map(batchLine)
     const text = told ? JSON.stringify({ ticket_id: ticket.id, assignment: ticket.assignments.length, ...retried })
       : JSON.stringify({ ticket_id: ticket.id, title: ticket.title, ...(brief ? { assignment: brief } : {}),
@@ -504,6 +585,7 @@ export class DshExecutor implements Executor {
       () => { if (!current()) throw new Error('Launch authorization changed before worker delivery') },
       () => { this.host.engine.assignmentStarted(ticket.id, assignment.id) })
     this.host.engine.assignmentStarted(ticket.id, assignment.id)
+    return true
   }
   /** Returns the stored ticket for `agent` when it is a worker session, or undefined otherwise. */
   private ticketOf(agent: Agent): Ticket | undefined {
@@ -552,6 +634,7 @@ export class DshExecutor implements Executor {
     for (const dispose of this.disposers.splice(0)) dispose()
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
+    this.working.clear()
   }
   /**
    * Reconciles running and pending assignments across open tickets after a host restart: notifies Engine of interrupted
@@ -654,13 +737,18 @@ export class DshExecutor implements Executor {
       return ((report?.state === 'ready' || !!stored.attention) && !since) || waitsForPerson(stored)
     }
     const before = live()
-    if (!before || this.host.closing()) return
+    if (!before || this.host.closing()) {
+      // A ticket without a live Assignment no longer works in its workspace.
+      if (!before) this.release(ticket.id)
+      return
+    }
     // A turn a person started in the Session is the person's work, which goes on in the background as any turn's does.
     const report = runningAssignment(before)?.report, person = this.personal.get(ticket.id)
     // The worker read what reached it before a turn that ended: one it handed off with, or one whose background work ended.
     if (handedOff(before) && !(report && person && person > report.at)) {
       this.host.engine.turnEnded(ticket.id, idle.id)
       this.handOff(ticket.id, agent)
+      this.release(ticket.id)
       return
     }
     // Its turn ends once nothing runs for it in the background, which holds its slot meanwhile: at most for the limit from
@@ -675,6 +763,7 @@ export class DshExecutor implements Executor {
     try { quiet = await untilQuiet(this.host.context, agent, AbortSignal.any([this.host.lifetime, look.signal, limit.signal]), left) }
     finally { clearTimeout(timer); if (this.settling.get(ticket.id) === look) this.settling.delete(ticket.id) }
     const current = live()
+    if (!current) this.release(ticket.id)
     if (this.host.closing() || look.signal.aborted || (!quiet && !limit.signal.aborted) || !current || this.resuming.has(idle.id)) return
     if (quiet) this.host.engine.turnEnded(ticket.id, idle.id)
     let stopped = ''
@@ -692,7 +781,9 @@ export class DshExecutor implements Executor {
         : `Subagents still ran ${minutes} minutes after the worker's turn ended.`
     }
     // The worker may have reported while its turn ended; a blocked or failed report a person's message has lifted is stale.
-    if (handedOff(current)) return
+    if (handedOff(current)) { this.release(ticket.id); return }
+    // Its turn ends here: another ticket may work in the workspace now.
+    this.release(ticket.id)
     const last = agent.session.snapshotEvents().filter(event => event.type === 'assistant/message').at(-1)
     const text = last?.type === 'assistant/message'
       ? last.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('\n').trim() : ''

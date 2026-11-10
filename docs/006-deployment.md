@@ -22,7 +22,7 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 
 - Node.js 22.19+ or 24+, pnpm, git 2.32+, Python 3.8+ and tmux
 - GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh` or `lark-cli` wrappers; the host relies on their subcommands and output formats.
-- A repository on github.com; GitHub Enterprise Server is not supported. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
+- A repository on github.com; GitHub Enterprise Server is not supported. To give Tickets a checkout, keep a local clone from which the prepare command can add worktrees; a reused workspace must be returned to the Ticket's branch by that command. Install `git-lfs` if that repository uses Git LFS.
 - A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another.
 - For Feishu: `lark-cli` (tested with 1.0.90) and a Feishu or Lark app with a bot
 
@@ -146,21 +146,40 @@ Setup must succeed before polling or work starts. Overview lists missing require
 
 1. **Sources.** Set the GitHub repository (`owner/name`) and agent CLI, for example `/home/me/.local/bin/gh-agent`. Requests normally arrive through the agent account's notifications. A new Issue or comment mentioning the account arrives on the next poll; adding a mention by editing an existing Issue body does not. Post a new comment instead. For Feishu, set the bot CLI, chats, each chat's receive-all or mentions-only mode, and whether to receive direct messages. For GitLab, set the site, project, access token and agent account, then choose whether to receive every new issue, merge request and note or only those that mention the agent.
 2. **Policy.** The two example rules can be edited or removed. Under **On each Source**, add the GitHub accounts, Feishu users, JIRA users and GitLab users who may ask for work; until a list has someone, no request can become a Ticket. With Feishu, a chat can be chosen to sync the list from, at startup and on **Sync now**.
-3. **Execution.** The directory root and a prepare command. To give each Ticket a checkout of its execution target:
+3. **Execution.** The directory root and a prepare command. A Ticket takes a free existing workspace whose last Ticket had the same execution target, and only then creates a directory, so a prepare command must be able to return an existing checkout to the current Ticket's state. To give Tickets a checkout of their execution target:
 
    ```sh
+   branch="agent/$DSH_SUPERAGENT_NAME"
    if [ -n "$DSH_SUPERAGENT_GITHUB_REPOSITORY" ]; then
-     git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
-     git -C /home/me/src/widgets worktree add -b "agent/$DSH_SUPERAGENT_NAME" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
+     if [ -n "$DSH_SUPERAGENT_REUSED" ]; then
+       git -C "$DSH_SUPERAGENT_DIR" fetch --no-tags origin "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}"
+       if git -C "$DSH_SUPERAGENT_DIR" show-ref --verify --quiet "refs/heads/$branch"; then
+         git -C "$DSH_SUPERAGENT_DIR" switch --force "$branch"
+       else
+         git -C "$DSH_SUPERAGENT_DIR" switch -C "$branch" FETCH_HEAD
+       fi
+     else
+       git -C /home/me/src/widgets fetch --no-tags "https://github.com/$DSH_SUPERAGENT_GITHUB_REPOSITORY.git" "${DSH_SUPERAGENT_GITHUB_PR_HEAD:-HEAD}:refs/dsh-superagent/$DSH_SUPERAGENT_TICKET" &&
+       git -C /home/me/src/widgets worktree add -b "$branch" "$DSH_SUPERAGENT_DIR" "refs/dsh-superagent/$DSH_SUPERAGENT_TICKET"
+     fi
    elif [ -n "$DSH_SUPERAGENT_GITLAB_PROJECT" ]; then
-     git clone --no-tags "$DSH_SUPERAGENT_GITLAB_SITE/$DSH_SUPERAGENT_GITLAB_PROJECT.git" "$DSH_SUPERAGENT_DIR" &&
-     git -C "$DSH_SUPERAGENT_DIR" switch -c "agent/$DSH_SUPERAGENT_NAME"
+     if [ -n "$DSH_SUPERAGENT_REUSED" ]; then
+       git -C "$DSH_SUPERAGENT_DIR" fetch --no-tags origin
+       if git -C "$DSH_SUPERAGENT_DIR" show-ref --verify --quiet "refs/heads/$branch"; then
+         git -C "$DSH_SUPERAGENT_DIR" switch --force "$branch"
+       else
+         git -C "$DSH_SUPERAGENT_DIR" switch -C "$branch" origin/HEAD
+       fi
+     else
+       git clone --no-tags "$DSH_SUPERAGENT_GITLAB_SITE/$DSH_SUPERAGENT_GITLAB_PROJECT.git" "$DSH_SUPERAGENT_DIR" &&
+       git -C "$DSH_SUPERAGENT_DIR" switch -c "$branch"
+     fi
    else
      mkdir -p "$DSH_SUPERAGENT_DIR"
    fi
    ```
 
-   The last branch handles a Ticket with no execution target, such as a non-coding request: its repository variables are empty. The GitLab branch applies when the Ticket targets a GitLab project and uses the credential configured for that site. List personal CLIs, such as one signed in to your own account, as blocked commands. The branch name is only a local label: the Source associates a pull or merge request by the hidden ticket marker in its body and its head commit, not by the branch name, so the prepare command may use any unique branch.
+   The last branch handles a Ticket with no execution target, such as a non-coding request: its repository variables are empty. The GitLab branch applies when the Ticket targets a GitLab project and uses the credential configured for that site. List personal CLIs, such as one signed in to your own account, as blocked commands. The branch name is only a local label: the Source associates a pull or merge request by the hidden ticket marker in its body and its head commit, not by the branch name, so the prepare command may use any unique branch. A new directory is named after the Ticket's short name, and a later Ticket may reuse the directory; a command that only adds a worktree must therefore handle `DSH_SUPERAGENT_REUSED=1` as above.
 4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
 
 ### Management API
@@ -263,7 +282,7 @@ Setup problems appear on the overview with a link to the fix, in the panel's lan
 | `The agent GitHub CLI cannot read its account` | Sign the wrapper in with `auth login` |
 | `@… cannot read …` or `@… cannot push to …` | Give the agent account write access to the repository |
 | `The GitHub Source names no repository.` | Set the repository, `owner/name`, on the GitHub card |
-| A Ticket fails with `The prepare command failed: …` | The output names the cause, such as a wrong clone path; fix the command, then retry the Ticket |
+| A Ticket fails with `The prepare command failed: …` | The output names the cause, such as a wrong clone path or a command that cannot return a reused workspace (`DSH_SUPERAGENT_REUSED`) to the Ticket's state; fix the command, then retry the Ticket |
 | `git does not read the github.com credential configuration dsh-superagent writes` | Install git 2.32 or later |
 | A Ticket fails with `The git configuration of the repository in … sets …` | Remove the named credential or `http.*.extraheader` settings from the clone's `.git/config` |
 | `… was not written by dsh-superagent` | Move the named file out of `<stateDir>/worker-bin` or `<stateDir>/worker-gitconfig`, or choose another `stateDir` |

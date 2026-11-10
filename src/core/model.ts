@@ -335,7 +335,12 @@ export interface Ticket {
  * Thread closed; the ticket then ends unless its work has not finished (see `Tickets.unfinished`).
  */
 export interface Follow { thread: string; own: boolean; closed?: { at: string; outcome: 'merged' | 'closed' } }
-export interface Execution { name: string; directory: string; assignment: string }
+/**
+ * What a Ticket's Executor chose for it: `name`, a short unique ticket name its prepare command may use for a branch;
+ * `directory`, the workspace it works in, which later Tickets may reuse once it ends; `assignment`, the routing text its
+ * worker reads; and `preparedAt`, when its prepare command last returned that workspace to its checkout.
+ */
+export interface Execution { name: string; directory: string; assignment: string; preparedAt?: string }
 
 /** Whether a ticket is open: it has not ended. */
 export const liveTicket = (ticket: Pick<Ticket, 'ended'>): boolean => !ticket.ended
