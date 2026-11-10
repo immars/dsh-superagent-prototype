@@ -8,10 +8,11 @@ import { Store } from '../src/app/store.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import {
-  apply, gitlabKind, gitlabMentioned, gitlabRef, GitlabConfigSchema, gitlabThreadContext, gitlabThreadKey, gitlabWebUrl,
+  apply, claimMerge, gitlabKind, gitlabMentioned, gitlabRef, GitlabConfigSchema, gitlabThreadContext, gitlabThreadKey, gitlabWebUrl,
   issueTrigger, mergeRequestTrigger, noteTrigger, pollGitlab, sendGitlab, type GitlabConfig,
 } from '../src/sources/gitlab.ts'
 import type { GitlabIssue, GitlabMergeRequest, GitlabNote } from '../src/sources/gitlab-client.ts'
+import { ticketMarkerLine } from '../src/sources/binding.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { join } from 'node:path'
 import { mkdtempSync } from 'node:fs'
@@ -79,7 +80,7 @@ function host(overrides: Partial<SourceContextDeps> = {}, register = true) {
   const commands = new Commands(() => deployment, {}, new AbortController().signal)
   const receive = vi.fn(async (trigger: Parameters<Engine['receive']>[0]) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
-    ready: Promise.resolve(), configured: () => true, receive, ...overrides }
+    ready: Promise.resolve(), configured: () => true, receive, commitInWorktree: async () => true, ...overrides }
   const context = (target: string | { kind: string; health: readonly string[] }) => {
     const id = typeof target === 'string' ? target : target.kind
     const kind = sources.kindOf(id) ?? (typeof target === 'string' ? undefined : target)
@@ -215,6 +216,29 @@ describe('gitlab polling', () => {
 
     await pollGitlab(h.ctx, CONFIG, new AbortController().signal)
     expect(await h.receive.mock.results.at(-1)!.value).toBe('duplicate')
+  })
+  it('binds an agent merge request by the ticket marker and its worktree commit', async () => {
+    const h = host()
+    h.store.tickets.save({ id: 't1', title: 'one', decisionId: 'd', mandate: { strength: 'explicit', policyVersion: '',
+      basis: { via: 'listed' }, actor: { source: 'gitlab', id: 'alice' }, scope: '' }, channels: [], assignments: [], inputs: [],
+      undelivered: [], createdAt: '', updatedAt: '', origin: { triggerId: 'x', triggerIds: [] } })
+    const mr = merge({ sha: 'abc', author: agent, description: `Fix the login page\n\n${ticketMarkerLine('t1')}` })
+    serve({
+      [`GET ${API}/issues`]: () => [],
+      [`GET ${API}/merge_requests`]: () => [mr],
+      [`GET ${API}/merge_requests/7/notes`]: () => [],
+    })
+    await pollGitlab(h.ctx, CONFIG, new AbortController().signal)
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: gitlabThreadKey({ kind: 'mr', iid: 7 }, 'gitlab'), own: true }])
+  })
+  it('binds a merge request an explicit report names without reading its source branch', () => {
+    const h = host()
+    h.store.tickets.save({ id: 't1', title: 'one', decisionId: 'd', mandate: { strength: 'explicit', policyVersion: '',
+      basis: { via: 'listed' }, actor: { source: 'gitlab', id: 'alice' }, scope: '' }, channels: [], assignments: [], inputs: [],
+      undelivered: [], createdAt: '', updatedAt: '', origin: { triggerId: 'x', triggerIds: [] } })
+    expect(claimMerge(h.ctx, 't1', merge({ author: agent, source_branch: 'anything' }))).toBeUndefined()
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: gitlabThreadKey({ kind: 'mr', iid: 7 }, 'gitlab'), own: true }])
+    expect(claimMerge(h.ctx, 't1', merge({ iid: 8, author: alice }))).toContain('does not belong')
   })
   it('receives only addressed items while project-wide observation is off', async () => {
     const h = host()

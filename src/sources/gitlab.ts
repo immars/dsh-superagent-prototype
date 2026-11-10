@@ -1,9 +1,11 @@
 /** GitLab Source kind, configuration form, policy, polling loop, and Cordis plugin entry. */
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
+import { liveTicket, type Ticket } from '../core/index.ts'
 import { sameName } from '../infra/text.ts'
 import { KV } from '../kv.ts'
 import { GitlabClient, type GitlabIssue, type GitlabMergeRequest, type GitlabWorkKind } from './gitlab-client.ts'
+import { ticketMarker } from './binding.ts'
 import { gitlabLink, sendGitlab } from './gitlab-channel.ts'
 import { gitlabThreadContext } from './gitlab-read.ts'
 import {
@@ -257,7 +259,7 @@ async function pollMergeRequests(ctx: SourceContext, client: GitlabClient, confi
       if (trigger && (config.observeMrs || trigger.addressed)) { await ctx.receive(trigger); result.read += 1 }
     }
     await intakeNotes(ctx, client, config, 'mr', merge, since, result, signal)
-    observeMerge(ctx, config, merge)
+    await observeMerge(ctx, config, merge)
     describe(ctx, config, 'mr', merge)
   }
 }
@@ -282,7 +284,7 @@ async function pollSubscribed(ctx: SourceContext, client: GitlabClient, config: 
     const since = ctx.state.get(KV.gitlab.thread(thread.key)) ?? thread.createdAt
     if (ref.kind === 'mr') {
       const merge = await client.mergeRequest(ref.iid)
-      observeMerge(ctx, config, merge)
+      await observeMerge(ctx, config, merge)
       await intakeNotes(ctx, client, config, 'mr', merge, since, result, signal)
       describe(ctx, config, 'mr', merge)
     } else {
@@ -300,18 +302,59 @@ function describe(ctx: SourceContext, config: GitlabConfig, kind: GitlabWorkKind
     facts: { project: { label: { zh: '项目', en: 'Project' }, value: config.project },
       state: { label: { zh: '状态', en: 'State' }, value: item.state } } })
 }
-const branchNamed = (ticket: { execution?: { name?: string } }, ref: string): boolean =>
-  !!ticket.execution?.name && ref.split('/').at(-1) === ticket.execution.name
 function originMerge(ctx: SourceContext, ticketId: string, iid: number): boolean {
   const ticket = ctx.tickets.get(ticketId)
   const origin = ticket && ctx.triggers.get(ticket.origin.triggerId)
   return origin?.source === ctx.instance.id && origin.meta.workKind === 'mr' && Number(origin.meta.iid) === iid
 }
+/** Reads one merge request from the Source's configured project. */
+export async function readMerge(ctx: SourceContext, iid: number, signal?: AbortSignal): Promise<GitlabMergeRequest> {
+  const config = ctx.config<GitlabConfig>()
+  if (!config) throw new Error('The GitLab Source is not configured')
+  return new GitlabClient({ site: config.site, project: config.project, token: config.token }, signal).mergeRequest(iid)
+}
+/** Binds a merge request's Thread to a Ticket, recording it as one the Ticket opened when `own`. */
+function bindMerge(ctx: SourceContext, config: GitlabConfig | undefined, ticketId: string, merge: GitlabMergeRequest, own: boolean): void {
+  const ref: GitlabRef = { kind: 'mr', iid: merge.iid }
+  const thread = gitlabThreadKey(ref, ctx.instance.id)
+  ctx.atomic(() => {
+    ctx.tickets.bindThread(ticketId, { source: ctx.instance.id, id: gitlabThreadId(ref) }, own)
+    ctx.threads.patch(thread, { kind: 'mr', iid: merge.iid, project: config?.project ?? '', title: merge.title,
+      url: merge.web_url ?? (config ? gitlabWebUrl(config, ref) : undefined) })
+  })
+}
 /**
- * Binds an open merge request to the one open Ticket it belongs to: the Ticket that started from it, or the agent's
- * own merge request whose source branch names that Ticket. A merged or closed request closes the Thread those Tickets follow.
+ * Validates and binds an open merge request to a ticket when it is either the ticket's source merge request or the agent
+ * account authored it in the ticket's target project. This is the GitLab counterpart of the explicit GitHub report; it does
+ * not read the source branch. Returns an error message when binding is rejected.
  */
-function observeMerge(ctx: SourceContext, config: GitlabConfig, merge: GitlabMergeRequest): void {
+export function claimMerge(ctx: SourceContext, ticketId: string, merge: GitlabMergeRequest): string | undefined {
+  const ticket = ctx.tickets.get(ticketId)
+  if (!ticket || !liveTicket(ticket)) return 'Ticket ended because its merge request was closed'
+  const started = originMerge(ctx, ticket.id, merge.iid)
+  const config = ctx.config<GitlabConfig>()
+  const target = ticket.target
+  const sameInstance = (target?.source ?? ctx.instance.id) === ctx.instance.id
+  const sameProject = !target || !config || sameName(target.repository, config.project)
+  const opened = sameInstance && sameProject && !!config?.agentAccount && sameName(merge.author?.username ?? '', config.agentAccount)
+  if (!started && !opened) {
+    return `Merge request does not belong to this ticket: use the source merge request or one by ${config?.agentAccount || 'the agent account'} in the ticket's target project; omit mr_iid when no merge request exists`
+  }
+  const thread = gitlabThreadKey({ kind: 'mr', iid: merge.iid }, ctx.instance.id)
+  if (ctx.tickets.open().some(item => item.id !== ticketId && item.follows?.some(follow => follow.thread === thread && !follow.closed))) {
+    return 'Merge request already belongs to another active ticket'
+  }
+  const follow = ticket.follows?.find(item => item.thread === thread)
+  const open = merge.state !== 'merged' && merge.state !== 'closed'
+  if (open && (!follow || follow.closed || (!started && !follow.own))) bindMerge(ctx, config, ticketId, merge, !started)
+  return undefined
+}
+/**
+ * Binds an open merge request to the one open Ticket it belongs to: the Ticket that started from it, or the Ticket whose
+ * marker is in the request's description when the request was authored by the agent account, targets this project, and its
+ * head commit is in that Ticket's worktree. A merged or closed request closes the Thread those Tickets follow.
+ */
+async function observeMerge(ctx: SourceContext, config: GitlabConfig, merge: GitlabMergeRequest): Promise<void> {
   const ref: GitlabRef = { kind: 'mr', iid: merge.iid }
   const thread = gitlabThreadKey(ref, ctx.instance.id)
   const follows = (ticketId: string): boolean =>
@@ -325,16 +368,19 @@ function observeMerge(ctx: SourceContext, config: GitlabConfig, merge: GitlabMer
   const owner = ctx.tickets.open().find(ticket => follows(ticket.id))
   if (owner && !owner.follows?.some(follow => follow.thread === thread && follow.closed)) return
   const started = ctx.tickets.open().filter(ticket => originMerge(ctx, ticket.id, merge.iid))
-  const branch = !!config.agentAccount && sameName(merge.author?.username ?? '', config.agentAccount)
-    ? ctx.tickets.open().filter(ticket => branchNamed(ticket, merge.source_branch)) : []
-  const candidates = [...new Map([...started, ...branch].map(ticket => [ticket.id, ticket])).values()]
-  // A merge request belongs to at most one Ticket; ambiguous branch names wait for the Executor to say which one it opened.
+  let marked: Ticket | undefined
+  const marker = ticketMarker(merge.description)
+  if (marker && config.agentAccount && sameName(merge.author?.username ?? '', config.agentAccount) && merge.sha) {
+    const candidate = ctx.tickets.get(marker)
+    const target = candidate?.target
+    if (candidate && liveTicket(candidate) && (target?.source ?? ctx.instance.id) === ctx.instance.id
+      && (!target || sameName(target.repository, config.project))
+      && (ctx.commitInWorktree ? await ctx.commitInWorktree(candidate.id, merge.sha) : false)) marked = candidate
+  }
+  const candidates = [...new Map([...started, ...marked ? [marked] : []].map(ticket => [ticket.id, ticket])).values()]
+  // A merge request belongs to at most one Ticket; another open Ticket's follow, or no marker, leaves it unbound.
   if (candidates.length !== 1) return
   const ticket = candidates[0]!
   if (owner && owner.id !== ticket.id) return
-  ctx.atomic(() => {
-    ctx.tickets.bindThread(ticket.id, { source: ctx.instance.id, id: gitlabThreadId(ref) }, branch.includes(ticket))
-    ctx.threads.patch(thread, { kind: 'mr', iid: merge.iid, project: config.project, title: merge.title,
-      url: merge.web_url ?? gitlabWebUrl(config, ref) })
-  })
+  bindMerge(ctx, config, ticket.id, merge, !started.includes(ticket))
 }

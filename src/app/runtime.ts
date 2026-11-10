@@ -35,6 +35,7 @@ import { candidateCard, repliedTo, sourceLink, type LinkHost } from './links.ts'
 import { eventNotice, followupNotice } from './notices.ts'
 import { pullEndNotices } from '../sources/github-pull.ts'
 import { HealthBoard } from '../infra/health.ts'
+import { worktreeContains } from '../infra/environment.ts'
 import { Outbox } from './outbox.ts'
 import { Passes } from './passes.ts'
 import { Schedules } from './schedules.ts'
@@ -169,10 +170,16 @@ export class Runtime extends Service implements SourceHost {
         configured: () => setup.configured(), paused: () => this.paused(), closing: () => this.closing() })
       this.sourceDeps = { store, engine, outbox, commands, sources, get ready() { return runtime.ready },
         get deployment() { return setup.deployment }, configured: () => setup.configured(),
-        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
+        get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger),
+        commitInWorktree: async (ticketId, sha) => {
+          const directory = store.tickets.get(ticketId)?.execution?.directory
+          if (!directory || runtime.closing()) return false
+          return worktreeContains(ctx.subprocess, directory, sha, runtime.lifetime)
+        } }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
         githubTarget: ticket => runtime.githubTarget(ticket),
+        gitlabTarget: ticket => runtime.gitlabTarget(ticket),
         requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
@@ -216,6 +223,12 @@ export class Runtime extends Service implements SourceHost {
     if (!target || this.sources.kindOf(target.source)?.kind !== 'github') return undefined
     const context = this.context(target.source)
     return { ...context, commands: context.commands.withRepository(target.repository) }
+  }
+  /** The Source context of a Ticket's GitLab execution target; undefined for a local-only Ticket or a target of another kind. */
+  gitlabTarget(ticket: Ticket): SourceContext | undefined {
+    const target = ticket.target
+    if (!target || this.sources.kindOf(target.source)?.kind !== 'gitlab') return undefined
+    return this.context(target.source)
   }
   /**
    * Resolves a pre-upgrade open Ticket's execution target once: a repository-capable origin instance, else the previously

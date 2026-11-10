@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { key, liveTicket, type Follow, type OutboundMessage, type ThreadFact, type Ticket } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import { sameName } from '../infra/text.ts'
+import { ticketMarker } from './binding.ts'
 import type { SourceContext } from './host.ts'
 import { githubPage, SOURCE, UserSchema } from './github-trigger.ts'
 
@@ -28,49 +29,72 @@ const repositoryOf = (ctx: SourceContext): string => String(ctx.config<{ reposit
 export const agentPull = (pr: { user: { login: string }; head?: { repo?: { full_name: string } | null } | null },
   deployment: Pick<Deployment, 'github' | 'repository'>, repository = deployment.repository): boolean =>
   sameName(pr.user.login, deployment.github.login) && sameName(pr.head?.repo?.full_name ?? '', repository)
-/** True when a branch belongs to the ticket: its last path segment is the ticket's short name, such as `agent/<name>`. */
-export const ticketBranch = (ticket: Pick<Ticket, 'execution'>, ref: string): boolean =>
-  !!ticket.execution?.name && ref.split('/').at(-1) === ticket.execution.name
+/** True when `pr` is the pull request the ticket started from. */
+const originPull = (ctx: SourceContext, ticket: Pick<Ticket, 'origin' | 'target'>, number: number): boolean => {
+  const source = ctx.triggers.get(ticket.origin.triggerId)
+  return source?.source === targetSource(ticket) && source.meta.isPr === true && source.meta.number === number
+}
+/** Whether an open ticket other than `ticketId` already follows `number`. */
+const ownedElsewhere = (ctx: SourceContext, ticketId: string, number: number): boolean =>
+  ctx.tickets.open().some(ticket => ticket.id !== ticketId && pullsOf(ticket, true).includes(number))
 const AUTO_MERGE_ON: ThreadFact = { label: { zh: '自动合并', en: 'Auto-merge' }, value: { zh: '已开启', en: 'on' } }
 
 /**
- * Validates and binds an open PR to a ticket when the PR is either the ticket's origin PR or an agent-authored PR on the ticket's branch, enforcing that one PR binds to at most one open ticket.
- * Returns an error message when binding is rejected, or undefined when the PR is bound or when the PR is not open (which is not an error).
+ * Validates and binds an open PR to a ticket when the PR is either the ticket's origin PR or a PR the agent account opened
+ * in the ticket's target repository, enforcing that one PR binds to at most one open ticket. The branch name is not read:
+ * a worker's report is the ticket's claim on its own PR, and the Source's automatic binding uses the hidden ticket marker
+ * plus the commit history instead.
+ * Returns an error message when binding is rejected, or undefined when the PR is bound or when the PR is not open (which is
+ * not an error).
  */
 export function claimPull(ctx: SourceContext, ticketId: string, pr: Pull): string | undefined {
   const ticket = ctx.tickets.get(ticketId)
   if (!ticket || !liveTicket(ticket)) return 'Ticket ended because its PR was closed'
-  const source = ctx.triggers.get(ticket.origin.triggerId)
-  const instance = targetSource(ticket)
-  const started = source?.source === instance && source.meta.isPr === true && source.meta.number === pr.number
-  const opened = agentPull(pr, ctx.deployment, ticket.target?.repository ?? repositoryOf(ctx)) && ticketBranch(ticket, pr.head.ref)
+  const started = originPull(ctx, ticket, pr.number)
+  const opened = agentPull(pr, ctx.deployment, ticket.target?.repository ?? repositoryOf(ctx))
   if (!started && !opened) {
     const { login } = ctx.deployment.github
-    return `PR does not belong to this ticket: use the source PR or a PR by ${login} from a branch whose last path segment is DSH_SUPERAGENT_NAME; omit pr_number when no PR exists`
+    return `PR does not belong to this ticket: use the source PR or a PR by ${login} in the ticket's target repository; omit pr_number when no PR exists`
   }
-  const owner = ctx.tickets.open().find(item => pullsOf(item, true).includes(pr.number))
-  if (owner && owner.id !== ticketId) return 'PR already belongs to another active ticket'
+  if (ownedElsewhere(ctx, ticketId, pr.number)) return 'PR already belongs to another active ticket'
+  const instance = targetSource(ticket)
   const follow = ticket.follows?.find(item => item.thread === `${instance}:${pr.number}`)
-  if (pr.state === 'open' && (!follow || follow.closed || (opened && !follow.own))) bind(ctx, ticketId, pr, opened)
+  if (pr.state === 'open' && (!follow || follow.closed || (!started && !follow.own))) bind(ctx, ticketId, pr, !started)
   return undefined
 }
 /**
- * Reconciles a polled PR's open/merged/closed state and auto-merge fact with any bound or branch-matching ticket of this
- * instance (or a legacy ticket without a target). An open agent PR auto-binds to the single open ticket on its branch
- * unless that ticket already follows another open PR (which only the Executor's report changes).
+ * Reconciles a polled PR's open/merged/closed state and auto-merge fact with the ticket that follows it. A PR the ticket
+ * followed until it closed is followed again when it reopens. An open agent PR with no binding auto-binds only when its body
+ * carries the marker of one live ticket, that ticket targets this repository, and the PR's head commit is in that ticket's
+ * worktree; otherwise only the Executor's report binds it.
  * @returns whether the PR has ended.
  */
 export async function observePull(ctx: SourceContext, pr: Pull): Promise<boolean> {
   const ended = pr.state === 'closed' || !!pr.merged
   if (ended) closePull(ctx, pr)
   else {
-    const repository = repositoryOf(ctx)
-    const candidates = ctx.tickets.open().filter(ticket => (ticket.target?.source ?? ctx.instance.id) === ctx.instance.id
-      && agentPull(pr, ctx.deployment, ticket.target?.repository ?? repository) && ticketBranch(ticket, pr.head.ref))
-    const ticket = candidates.length === 1 ? candidates[0]! : undefined
+    const instance = ctx.instance.id
+    const thread = `${instance}:${pr.number}`
     // A PR the ticket followed until it closed, and that is open again, is followed again.
-    const reopened = ticket?.follows?.some(item => item.thread === `${ctx.instance.id}:${pr.number}` && item.closed)
-    if (ticket && (reopened || pullsOf(ticket, true).every(number => number === pr.number))) claimPull(ctx, ticket.id, pr)
+    const reopened = ctx.tickets.open().find(ticket => ticket.follows?.some(item => item.thread === thread && item.closed))
+    if (reopened) {
+      const follow = reopened.follows!.find(item => item.thread === thread)!
+      bind(ctx, reopened.id, pr, follow.own)
+    } else {
+      const marker = ticketMarker(pr.body)
+      const ticket = marker ? ctx.tickets.get(marker) : undefined
+      if (ticket && liveTicket(ticket)) {
+        const repository = repositoryOf(ctx)
+        const target = ticket.target
+        const sameInstance = (target?.source ?? instance) === instance
+        const sameRepository = !target || sameName(target.repository, repository)
+        const verified = sameInstance && sameRepository && agentPull(pr, ctx.deployment, target?.repository ?? repository)
+          && (ctx.commitInWorktree ? await ctx.commitInWorktree(ticket.id, pr.head.sha) : false)
+        if (verified && pullsOf(ticket, true).every(number => number === pr.number) && !ownedElsewhere(ctx, ticket.id, pr.number)) {
+          bind(ctx, ticket.id, pr, !originPull(ctx, ticket, pr.number))
+        }
+      }
+    }
   }
   ctx.threads.describe(`${ctx.instance.id}:${pr.number}`, { facts: { autoMerge: !ended && pr.auto_merge != null ? AUTO_MERGE_ON : null } })
   return ended

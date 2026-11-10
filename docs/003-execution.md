@@ -53,7 +53,7 @@ Worker subagents, including nested ones, use DeepSeek Harness's `standard` prese
 
 Before the first Assignment, if the Ticket directory does not exist, the prepare command runs once with `sh` in the execution root. It has ten minutes to finish. Without a prepare command, the worker starts in an empty directory.
 
-A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request belongs to the Ticket when its branch's last path segment matches the Ticket's short name.
+A failed command fails the Ticket and records its output. A retry or a person's message on one of the Ticket's Threads tries preparation again. A typical command uses `git worktree` to create a checkout. A pull request belongs to the Ticket when the Executor reports it, or when its body carries the Ticket's hidden marker and its head commit is in the Ticket's worktree; the branch name is not read.
 
 ### Concurrency
 
@@ -100,7 +100,7 @@ Reviews without a body, such as approvals, also arrive as Triggers and can wake 
 - **Nothing to do:** an Executor that finds no work for a person to act on, such as a request that does not reproduce or is superseded, reports `dropped`. The Ticket ends without a message, unless a matched rule asks for one, and a person's later message on its Threads resumes it.
 ### Pull requests
 
-A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request opened from its branch once reported by the Executor or found by the GitHub Source. Reopened pull requests are followed again.
+A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request whose body carries the Ticket's hidden marker (and whose head commit is in the Ticket's worktree) once reported by the Executor or found by the GitHub Source. Reopened pull requests are followed again.
 
 The Ticket is done when none of the pull requests it opened remain open. If it opened none, all pull requests it follows must be closed. It then ends with the outcome of the last relevant close and keeps its Subscriptions, allowing a later human comment to resume it.
 

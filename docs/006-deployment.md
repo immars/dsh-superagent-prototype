@@ -160,7 +160,7 @@ Setup must succeed before polling or work starts. Overview lists missing require
    fi
    ```
 
-   The last branch handles a Ticket with no execution target, such as a non-coding request: its repository variables are empty. The GitLab branch applies when the Ticket targets a GitLab project and uses the credential configured for that site. List personal CLIs, such as one signed in to your own account, as blocked commands.
+   The last branch handles a Ticket with no execution target, such as a non-coding request: its repository variables are empty. The GitLab branch applies when the Ticket targets a GitLab project and uses the credential configured for that site. List personal CLIs, such as one signed in to your own account, as blocked commands. The branch name is only a local label: the Source associates a pull or merge request by the hidden ticket marker in its body and its head commit, not by the branch name, so the prepare command may use any unique branch.
 4. **Prompts.** Set the team sections: the GitHub disclosure line, review bots, the commit author and the auto-merge condition.
 
 ### Management API

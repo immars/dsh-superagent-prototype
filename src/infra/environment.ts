@@ -3,7 +3,7 @@
  * Variables read by workers avoid `KEY|PASSWORD|SECRET|TOKEN` in their names because DSH strips credential-shaped variables from child environments.
  * Provides default-path guardrails rather than an OS-level security boundary, as workers run under the operator's OS user.
  */
-import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { delimiter, join, resolve } from 'node:path'
 import type { SubprocessOutputReader, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -132,6 +132,21 @@ export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[],
   if (exitCode === 0) return read(handle.collected.stdout)
   const ended = exitCode === null ? 'was stopped before it finished' : `exited with ${exitCode}`
   throw new CliError(read(handle.collected.stderr).trim() || `${argv.join(' ')} ${ended}`, undefined, exitCode ?? undefined)
+}
+
+/**
+ * Whether `sha` is reachable from the current HEAD of the Git worktree at `directory`. Returns false when the directory
+ * is missing or not a Git checkout, when `sha` is not a commit hash, or when the check fails; it never throws.
+ */
+export async function worktreeContains(subprocess: SubprocessRuntime, directory: string, sha: string, signal: AbortSignal): Promise<boolean> {
+  if (!directory || !/^[0-9a-f]{7,64}$/i.test(sha)) return false
+  if (!await stat(directory).then(info => info.isDirectory(), () => false)) return false
+  try {
+    await runAsWorker(subprocess, ['git', 'merge-base', '--is-ancestor', sha, 'HEAD'], directory, AbortSignal.any([signal, AbortSignal.timeout(30_000)]))
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Verifies that worker git invocations resolve the deployment's GitHub credential helper. */
