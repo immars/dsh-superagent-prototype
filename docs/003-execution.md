@@ -83,7 +83,7 @@ The prepare command and Executor instructions receive the same execution variabl
 
 A Ticket with no execution target has empty repository variables, so its prepare command must handle that case and create the local directory itself. A GitLab target supplies `DSH_SUPERAGENT_GITLAB_SITE` and `DSH_SUPERAGENT_GITLAB_PROJECT` instead of the GitHub repository variables.
 
-Ticket-specific values come from its directory and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
+Ticket-specific values come from its workspace and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
 Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
 
