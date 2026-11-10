@@ -254,7 +254,7 @@ A file in `worker-bin` or `worker-gitconfig` that dsh-superagent did not write s
 
 ## Try it
 
-From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and directory, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
+From an allowed GitHub account, open an Issue or post a comment containing `@<agent login> <request>`. Within a polling interval (one minute by default), Overview should show a Ticket. The agent acknowledges the request, works in its own Session and workspace, and delivers in the original conversation. For Feishu, mention the bot in a configured chat.
 
 ## Upgrade
 
@@ -264,6 +264,10 @@ From an allowed GitHub account, open an Issue or post a comment containing `@<ag
 4. Run `scripts/dsh-superagent restart` and inspect its status.
 
 A restart ends running Assignments and starts replacements with recovery notes. Team text and overridden prompt parts are retained; parts without overrides follow the new defaults. Review parts marked **Default updated** after upgrading.
+
+### Prepare command after workspace reuse
+
+This version lets Tickets reuse workspaces, so a prepare command must handle a workspace that already exists. A deployment that already has one replaces it with the form under [Settings](#settings), which receives `DSH_SUPERAGENT_REUSED=1` for a reused workspace and returns it to the incoming Ticket's branch. Until then, the first Ticket that reuses a workspace fails with `The prepare command failed: … The workspace already existed: the prepare command must return it to this ticket's state.`; fix the command in **Settings → Execution** and retry the Ticket. Existing Ticket directories keep their names and paths and need no other change.
 
 A database migrated by a newer version cannot be opened by an older one. Rollback therefore requires the pre-upgrade backup. After upgrading DeepSeek Harness itself, restart the running instance so the panel loads matching artifacts.
 
