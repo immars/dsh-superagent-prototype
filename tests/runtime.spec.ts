@@ -224,8 +224,9 @@ it('relays an explicit member mention as a candidate and creates the ticket, ack
   expect(ticket).toMatchObject({ title: '修复回归', mandate: { strength: 'explicit', basis: expect.objectContaining({ via: 'addressed', source: 'feishu', sender: 'Alice', addressed: 'mention', scope: expect.objectContaining({ chatId: CHAT }) }) },
     execution: expect.objectContaining({ name: expect.stringMatching(/^fix-regression-/) }), origin: expect.objectContaining({ triggerId: trigger.id }) })
   expect(ticket).not.toHaveProperty('ended')
-  // The ticket's execution environment is fixed at accept time: its directory under the execution root, and the Sources' values from its Trigger.
-  expect(ticket.execution!.directory).toBe(join(directory, 'work', ticket.execution!.name))
+  // The ticket's execution environment is fixed at accept time: a workspace under the execution root named after its short name, and the Sources' values from its Trigger.
+  expect(ticket.execution!.directory).toBe(join(directory, 'work', 'fix-regression'))
+  expect(ticket.execution!.directory).not.toBe(join(directory, 'work', ticket.execution!.name))
   expect(Object.fromEntries(runtime.ticketEnvironment(ticket).map(variable => [variable.key, variable.value]))).toMatchObject({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_TICKET: ticket.id, DSH_SUPERAGENT_FEISHU_CHAT: CHAT, DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_GITHUB_ACCOUNT: 'agent-bot', DSH_SUPERAGENT_GITHUB_NUMBER: '' })
   expect(ticket.assignments).toEqual([expect.objectContaining({ state: 'running', startedAt: expect.any(String) })])
   expect(sessionId).toBe(`worker-${ticket.id}`)
@@ -1205,7 +1206,8 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   prepare('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"')
   const { ticket } = await acceptedTicket()
   expect(runs()).toEqual([expect.objectContaining({ argv: ['sh', '-c', 'git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'], cwd: join(directory, 'work'),
-    env: expect.objectContaining({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_FEISHU_CHAT: CHAT }) })])
+    env: expect.objectContaining({ DSH_SUPERAGENT_DIR: ticket.execution!.directory, DSH_SUPERAGENT_NAME: ticket.execution!.name, DSH_SUPERAGENT_REUSED: '',
+      DSH_SUPERAGENT_GITHUB_REPOSITORY: 'acme/widgets', DSH_SUPERAGENT_FEISHU_CHAT: CHAT }) })])
   // A retry reuses the prepared directory.
   await runTool(`worker-${ticket.id}`, 'orchestrator_report', { state: 'failed', summary: 'offline' })
   await runtime.engine.retryTicket(ticket.id)
@@ -1217,6 +1219,26 @@ it('runs the prepare command once for a new ticket, under the execution root wit
   await runtime.idle()
   expect(runtime.store.tickets.get(failed.ticket.id)!.assignments.at(-1)).toMatchObject({ report: expect.objectContaining({ state: 'failed', summary: expect.stringContaining('The prepare command failed: fatal: no such clone') }) })
   expect(waitsForPerson(runtime.store.tickets.get(failed.ticket.id)!)).toBe(true)
+})
+
+it('reuses an ended ticket\'s workspace and prepares it again for the next ticket', async () => {
+  const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
+  subprocess.spawn.mockClear()
+  const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; env?: Record<string, string> }).filter(spec => spec.argv[0] === 'sh')
+  prepare('true')
+  const { ticket, sessionId } = await acceptedTicket()
+  await runTool(sessionId, 'orchestrator_report', { state: 'dropped', summary: 'nothing to do' })
+  expect(runtime.store.tickets.get(ticket.id)!.ended).toBeDefined()
+  const second = feishu('2', '@bot 另一件事')
+  await receive(second)
+  const result = await route({ kind: 'accept', trigger_id: second.id, title: '另一件事', worktree_name: 'other-work', execution_target: 'github', acknowledgement: '收到。' })
+  const next = runtime.store.tickets.get((result.ticket as { ticket_id: string }).ticket_id)!
+  await runtime.idle()
+  // The free workspace of the same target is reused, under its own name for the new ticket.
+  expect(next.execution!.directory).toBe(ticket.execution!.directory)
+  expect(next.execution!.name).not.toBe(ticket.execution!.name)
+  expect(runs()).toHaveLength(2)
+  expect(runs()[1]!.env).toMatchObject({ DSH_SUPERAGENT_REUSED: '1', DSH_SUPERAGENT_DIR: ticket.execution!.directory })
 })
 
 it('counts a ticket whose directory the host prepared before prepare commands existed as prepared', async () => {

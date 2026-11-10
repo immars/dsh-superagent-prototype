@@ -176,6 +176,31 @@ it('counts a launch under way against maxWorkers, so a bot\'s Input for an idle 
   expect(h.runtime.store.tickets.get(one.ticket.id)!.undelivered).toHaveLength(1)
 })
 
+it('gives a reused workspace to one ticket at a time, and starts the waiting launch when the working ticket\'s turn ends', async () => {
+  const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
+  await h.runTool(one.sessionId, 'orchestrator_report', { state: 'dropped', summary: 'nothing to do' }); await h.runtime.idle()
+  expect(h.runtime.store.tickets.get(one.ticket.id)!.ended).toBeDefined()
+  // The next ticket takes the free workspace; its worker works there now.
+  const two = await h.acceptedTicket(feishu('5', '@bot 修二'))
+  expect(two.ticket.execution!.directory).toBe(one.ticket.execution!.directory)
+  expect(h.agents.get(two.sessionId)!.status).toBe('running')
+  // The previous ticket resumes on its thread, but its launch waits for the workspace.
+  const delivered = () => h.deliveries.mock.calls.filter(([call]) => call.sessionId === one.sessionId).length
+  const before = delivered()
+  h.runtime.receive(feishu('2', '一的补充', { mentions: [], root_id: 'om_1', sender_id: 'ou_guest' }))
+  await h.runtime.idle()
+  expect(h.runtime.store.tickets.get(one.ticket.id)!.ended).toBeUndefined()
+  expect(h.runtime.store.tickets.get(one.ticket.id)!.assignments.at(-1)!.state).toBe('pending')
+  expect(delivered()).toBe(before)
+  // Once ticket two's turn ends, the waiting launch prepares the workspace for ticket one and starts it.
+  idle(two.sessionId)
+  await waitUntil(() => h.runtime.store.tickets.get(two.ticket.id)!.assignments.at(-1)!.report?.state === 'waiting')
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 6000 })
+  try { await h.runtime.pump(); await h.runtime.idle() } finally { vi.useRealTimers() }
+  await waitUntil(() => h.runtime.store.tickets.get(one.ticket.id)!.assignments.at(-1)!.state === 'running')
+  expect(delivered()).toBeGreaterThan(before)
+})
+
 it('records on the ticket that its worker Session could not be created again', async () => {
   const one = await h.acceptedTicket(feishu('1', '@bot 修一'))
   h.agents.get(one.sessionId)!.status = 'idle'
