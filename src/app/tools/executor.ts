@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { liveTicket, type EngineForExecutor, type Ticket } from '../../core/index.ts'
 import { IM_WORDS } from '../../infra/text.ts'
 import { claimPull, readPull } from '../../sources/github-pull.ts'
+import { claimMerge, readMerge } from '../../sources/gitlab.ts'
 import type { SourceContext } from '../../sources/host.ts'
 import { readResource, type ResourceHost } from '../resources.ts'
 import type { Store } from '../store.ts'
@@ -19,12 +20,15 @@ export interface ExecutorToolsHost {
   readonly github: SourceContext
   /** The Ticket target's GitHub context, with repository-scoped commands; undefined for local-only tickets and other kinds. */
   githubTarget(ticket: Ticket): SourceContext | undefined
+  /** The Ticket target's GitLab context; undefined for local-only tickets and other kinds. */
+  gitlabTarget(ticket: Ticket): SourceContext | undefined
   sendReplies(): Promise<void>
 }
 
 export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
   const ticketId = ticket.id
   const github = host.githubTarget(ticket)
+  const gitlab = host.gitlabTarget(ticket)
   return [
     readTool('Read one page of a resource of this ticket that the resource parameter lists. Follow next_offset, and next_resource where a page names one.',
       true, (resource, offset, limit, signal) => readResource(host.resources, resource, offset, limit, ticketId, signal)),
@@ -82,21 +86,30 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         summary: z.string().min(1),
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
-        pr_number: z.number().int().positive().nullish().describe(`The ticket's PR in its GitHub target repository: its source PR, or one by ${host.github.deployment.github.login} from a branch named after this ticket (DSH_SUPERAGENT_NAME). A local-only ticket has no repository target, so it reports without pr_number.`),
+        pr_number: z.number().int().positive().nullish().describe(`The ticket's PR in its GitHub target repository: its source PR, or one by ${host.github.deployment.github.login} in that repository. A local-only ticket has no repository target, so it reports without pr_number.`),
+        mr_iid: z.number().int().positive().nullish().describe('The ticket\'s merge request in its GitLab target project: its source merge request, or one by the configured agent account in that project. Use instead of pr_number for a GitLab target.'),
         reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
       }).strict(),
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
         if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
+        if (args.pr_number != null && args.mr_iid != null) throw new Error('Report one pull request or merge request, not both')
         if (args.pr_number != null && !github) {
           throw new Error(current.target
             ? 'This ticket\'s execution target is not a GitHub repository; a pull request cannot be bound'
             : 'This ticket has no repository target; pull requests are unavailable. Report without pr_number')
         }
+        if (args.mr_iid != null && !gitlab) {
+          throw new Error(current.target
+            ? 'This ticket\'s execution target is not a GitLab project; a merge request cannot be bound'
+            : 'This ticket has no repository target; merge requests are unavailable. Report without mr_iid')
+        }
         const pull = args.pr_number != null ? await readPull(github!, args.pr_number, signal) : undefined
-        // Claim the PR, record the report, and queue the relay atomically so a rejected PR claim or invalid report leaves no partial state, and a recorded report always reaches the main Session.
+        const merge = args.mr_iid != null ? await readMerge(gitlab!, args.mr_iid, signal) : undefined
+        // Claim the change request, record the report, and queue the relay atomically so a rejected claim or invalid report
+        // leaves no partial state, and a recorded report always reaches the main Session.
         return host.store.atomic(() => {
-          const refused = pull && claimPull(github!, ticketId, pull)
+          const refused = merge ? claimMerge(gitlab!, ticketId, merge) : pull ? claimPull(github!, ticketId, pull) : undefined
           if (refused) throw new Error(refused)
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),

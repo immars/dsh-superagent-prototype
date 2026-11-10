@@ -6,7 +6,8 @@ import { KV } from '../src/kv.ts'
 import { apply as applyFeishu, pollThreads as pollFeishuThreads } from '../src/sources/feishu.ts'
 import { runFeishu, runFeishuAccount } from '../src/sources/feishu-loops.ts'
 import { commentTrigger, githubAddress, githubChannel, issueTrigger, type GithubComment, type GithubIssue } from '../src/sources/github-trigger.ts'
-import { claimPull, observePull, pullEndNotices, pullOf, ticketBranch, type Pull } from '../src/sources/github-pull.ts'
+import { claimPull, observePull, pullEndNotices, pullOf, type Pull } from '../src/sources/github-pull.ts'
+import { ticketMarker, ticketMarkerLine } from '../src/sources/binding.ts'
 import { ciCounts, ciFact, ciSummary } from '../src/sources/github-read.ts'
 import { apply as applyGithub, githubKind, pollFailure, pollRound } from '../src/sources/github.ts'
 import { pollThreads as pollGithubThreads } from '../src/sources/github.ts'
@@ -40,7 +41,7 @@ function host(overrides: Partial<SourceContextDeps> = {}) {
   const receive = vi.fn(async (trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
   // Record outbound messages in the store without sending them.
   const parts: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
-    ready: Promise.resolve(), configured: () => true, receive, ...overrides }
+    ready: Promise.resolve(), configured: () => true, receive, commitInWorktree: async () => true, ...overrides }
   // The Sources' functions take the context; plugin entries and kind callbacks take the host, which builds each kind's context.
   const value = { ...parts, context: (target: string | { kind: string; health: readonly string[] }) => {
     const id = typeof target === 'string' ? target : target.kind
@@ -389,11 +390,12 @@ describe('github source', () => {
       expect(githubAddress(url, 'acme/widgets')).toBeUndefined()
     }
   })
-  it('matches a branch to a ticket by its short name as the last path segment', () => {
-    expect(ticketBranch({ execution: execution('fix-title-1a2b3c') }, 'agent/fix-title-1a2b3c')).toBe(true)
-    expect(ticketBranch({ execution: execution('fix-title-1a2b3c') }, 'fix-title-1a2b3c')).toBe(true)
-    expect(ticketBranch({ execution: execution('fix-title-1a2b3c') }, 'agent/fix-title-1a2b3c-2')).toBe(false)
-    expect(ticketBranch({}, 'agent/x')).toBe(false)
+  it('reads one hidden ticket marker from a change request body', () => {
+    const line = '<!-- dsh-superagent:ticket=a610da7fd88c -->'
+    expect(ticketMarker(`Body\n\n${line}`)).toBe('a610da7fd88c')
+    expect(ticketMarker('Body')).toBeUndefined()
+    expect(ticketMarker(`${line}\n<!-- dsh-superagent:ticket=another -->`)).toBeUndefined()
+    expect(ticketMarker(`<!-- dsh-superagent:ticket=a -->\n<!-- dsh-superagent:ticket=a -->`)).toBe('a')
   })
   it('describes CI as one fact: failed checks first, then unfinished ones, otherwise passed', () => {
     const counts = ciCounts({ head: 'abc', checks: [{ name: 'e2e', status: 'completed', conclusion: 'failure' }, { name: 'lint', status: 'in_progress', conclusion: null }, { name: 'docs', status: 'completed', conclusion: 'skipped' }], statuses: [{ context: 'deploy', state: 'error' }, { context: 'preview', state: 'pending' }] })
@@ -437,14 +439,14 @@ describe('github source', () => {
     expect(ciSummary({ ...failing, checks: [check('unit', 'completed', 'success')] }, 'PR #9',
       read)).toMatch(/^CI passed 1\/1 on PR #9 at abc1234/)
   })
-  it('binds a PR to the unique live ticket on its branch and ends tickets when the PR closes', async () => {
+  it('binds a marked PR to the live ticket and ends tickets when the PR closes', async () => {
     const h = host()
     const decisionId = 'd'
     const request = feishuTrigger({ message_id: 'om_1', chat_id: 'oc_1', chat_type: 'group', sender_id: MEMBER, sender_type: 'user', content: '@bot 修一下标题', create_time: '1', mentions: [{ id: 'ou_bot' }] }, 'ou_bot', 'cli_bot')!
     h.store.triggers.save(request)
     h.store.tickets.save({ id: 't1', title: 'one', decisionId, mandate: { strength: 'explicit', policyVersion: '', basis: { via: 'listed' }, actor: { source: 'feishu', id: MEMBER }, scope: '' }, channels: [{ source: 'feishu', thread: 'feishu:oc_1', address: { chatId: 'oc_1', messageId: 'om_1' } }], assignments: [{ id: 'a', state: 'running', createdAt: '' }], inputs: [], undelivered: [], createdAt: '', updatedAt: '', execution: execution('one'), origin: { triggerId: request.id, triggerIds: [request.id] } })
-    const agentsPull = (number: number): Pull => ({ ...openPull(number), user: { login: 'agent-bot' }, head: { sha: 'abc',
-      ref: 'agent/one', repo: { full_name: 'acme/widgets' } } })
+    const agentsPull = (number: number): Pull => ({ ...openPull(number), body: ticketMarkerLine('t1'), user: { login: 'agent-bot' },
+      head: { sha: 'abc', ref: 'agent/one', repo: { full_name: 'acme/widgets' } } })
     await observePull(h, agentsPull(9))
     expect(pullOf(h.store.tickets.get('t1')!)).toBe(9)
     expect(h.store.threads.get('github:9')?.subscriptions).toEqual(['t1'])
@@ -468,6 +470,27 @@ describe('github source', () => {
     expect(Date.parse(h.store.tickets.get('t1')!.ended!.at)).toBeGreaterThan(Date.parse('2026-09-03T00:00:00Z'))
     // Its notice has the id of the first one, so it goes out once.
     expect(pullEndNotices(h.store.tickets.get('t1')!, request.text, 'acme/widgets').map(notice => notice.id)).toEqual(notices.map(notice => notice.id))
+    h.store.close()
+  })
+  it('auto-binds an agent PR only when its marker, repository, and worktree commit agree', async () => {
+    const agent = (number: number, body?: string, repo = 'acme/widgets'): Pull => ({ ...openPull(number), ...body ? { body } : {},
+      user: { login: 'agent-bot' }, head: { sha: 'abc', ref: 'whatever', repo: { full_name: repo } } })
+    const marker = ticketMarkerLine('t1')
+    for (const [name, ctx, pull] of [
+      ['no marker', host(), agent(50)],
+      ['commit not in the worktree', host({ commitInWorktree: async () => false }), agent(51, marker)],
+      ['a fork', host(), agent(52, marker, 'someone/fork')],
+      ['two markers', host(), agent(53, `${marker}\n${ticketMarkerLine('t2')}`)],
+    ] as const) {
+      ctx.store.tickets.save(openTicket('t1'))
+      await observePull(ctx, pull)
+      expect(ctx.store.tickets.get('t1')!.follows, name).toBeUndefined()
+      ctx.store.close()
+    }
+    const h = host()
+    h.store.tickets.save(openTicket('t1'))
+    await observePull(h, agent(54, marker))
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'github:54', own: true }])
     h.store.close()
   })
   it('keeps a ticket working on its other open PR when one of its PRs merges', async () => {
@@ -772,6 +795,18 @@ describe('github source', () => {
     expect(h.receive.mock.calls.filter(([trigger]) => trigger.meta.kind === 'pull')).toEqual([])
     h.store.close()
   })
+  it('binds an agent PR from its notification when its body carries the ticket marker', async () => {
+    const h = host()
+    h.store.tickets.save(openTicket('t1'))
+    h.store.set('github-since', '2026-09-08T00:00:00.000Z')
+    const pr = { ...openPull(9), body: ticketMarkerLine('t1'), user: { login: 'agent-bot', type: 'User' } }
+    github(h, { notifications: [notification(9, 'pulls')], 'pulls/9': pr,
+      'commits/abc/check-runs': { check_runs: [] }, 'commits/abc/statuses': [] })
+    await pollRound(h)
+    // The agent's own PR brings no candidate, but its marker binds the PR thread to the ticket.
+    expect(h.receive).not.toHaveBeenCalled()
+    expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'github:9', own: true }])
+  })
   it('reads a subscribed default-branch CI Thread as no Issue, and keeps no poll error on it', async () => {
     const h = host()
     h.store.tickets.save(openTicket('ticket'))
@@ -998,7 +1033,7 @@ describe('github source', () => {
     expect(h.store.get('github-since')).toBe('2026-09-08T00:00:00.000Z')
     h.store.close()
   })
-  it('lets a ticket follow its source PR or the agent\'s PR from its branch, and refuses others', async () => {
+  it('lets a ticket follow its source PR or an agent PR in its target repository, without reading the branch name', async () => {
     const h = host()
     const source = commentTrigger({ id: 1, body: '@agent-bot fix', user: { login: 'alice' },
       html_url: 'https://github.com/acme/widgets/pull/30#issuecomment-1' }, { number: 30, isPr: true }, 'conversation', 'agent-bot')
@@ -1016,7 +1051,7 @@ describe('github source', () => {
     expect(pullOf(h.store.tickets.get('t1')!)).toBeUndefined()
     expect(claimPull(h, 't1', openPull(30))).toBeUndefined()
     expect(h.store.tickets.get('t1')!.follows).toEqual([{ thread: 'github:30', own: false }])
-    expect(claimPull(h, 't1', agents(43, 'agent/fix-1'))).toBeUndefined()
+    expect(claimPull(h, 't1', agents(43, 'unrelated-branch-name'))).toBeUndefined()
     expect(h.store.tickets.get('t1')).toMatchObject({ follows: [{ thread: 'github:30', own: false }, { thread: 'github:43', own: true }], channels: [] })
     expect(pullOf(h.store.tickets.get('t1')!)).toBe(43)
     expect(h.store.threads.get('github:43')).toMatchObject({ subscriptions: ['t1'], meta: { isPr: true, prAuthor: 'agent-bot' } })

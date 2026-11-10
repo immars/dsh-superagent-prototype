@@ -24,6 +24,8 @@ export interface SourceContextDeps {
   readonly feishuProblem?: SetupProblem | undefined
   /** Hands a Trigger to the Engine and schedules the pass that assesses it. */
   receive(trigger: Trigger): ReceiveResult | Promise<ReceiveResult>
+  /** Whether `sha` is reachable from ticket `id`'s worktree HEAD; absent when the host cannot check it. */
+  readonly commitInWorktree?: (id: string, sha: string) => Promise<boolean>
 }
 
 /**
@@ -64,6 +66,7 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
       bindThread: (id, thread, own) => { deps.engine.bindThread(id, thread, own) },
       threadClosed: (thread, outcome, at) => { deps.engine.threadClosed(thread, outcome, at) },
     },
+    commitInWorktree: (id, sha) => deps.commitInWorktree?.(id, sha) ?? Promise.resolve(false),
     triggers: { get: id => store.triggers.get(id), latest: thread => store.read.threadTriggers(thread, 1)[0] },
     notify: message => { deps.outbox.send(message) },
     report: (entry, value) => {

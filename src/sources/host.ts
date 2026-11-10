@@ -63,6 +63,12 @@ export interface SourceContext {
     /** Reports that a followed Thread closed at `at`; each open ticket following it ends once no `own` Thread remains open and no resumed work is still running. */
     threadClosed(thread: ThreadRef, outcome: 'merged' | 'closed', at: string): void
   }
+  /**
+   * Whether `sha` is reachable from ticket `id`'s worktree HEAD. The Source uses it to verify that a change request
+   * carrying the ticket's marker was pushed from that worktree; false when the worktree is missing or is not a Git
+   * checkout, or when the host cannot check it.
+   */
+  commitInWorktree?(id: string, sha: string): Promise<boolean>
   triggers: { get(id: string): Trigger | undefined; /** The newest Trigger on a Thread. */ latest(thread: string): Trigger | undefined }
   notify(message: OutboundMessage): void
   /** Reports the state of one of this kind's declared health entries; throws for undeclared entry names. */

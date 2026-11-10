@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
-  from '../src/infra/environment.ts'
+import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, worktreeContains,
+  writeEnvironment } from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 import { gitEnv } from './fixtures/git.ts'
@@ -158,6 +158,32 @@ describe('ticket directory check', () => {
     const error = await runAsWorker(subprocess(join(dir, 'global')), failing, dir, signal).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(CliError)
     expect(error).toMatchObject({ message: 'nope', exitCode: 3 })
+  })
+})
+
+describe('ticket worktree commit check', () => {
+  const signal = new AbortController().signal
+  const env = () => gitEnv({ GIT_CONFIG_GLOBAL: join(dir, 'global'), GIT_CONFIG_NOSYSTEM: '1' })
+  const git = (...args: string[]) => exec('git', args, { cwd: dir, env: env() })
+  const check = (directory: string, sha: string) => worktreeContains(subprocess(join(dir, 'global')), join(dir, directory), sha, signal)
+  beforeEach(() => { writeFileSync(join(dir, 'global'), '') })
+  it('accepts the worktree HEAD and its ancestors, and rejects an unknown commit, a non-repository, and a malformed hash', async () => {
+    await git('init', '-q', 'repo')
+    writeFileSync(join(dir, 'repo', 'one'), 'one')
+    await git('-C', 'repo', 'add', 'one')
+    await git('-C', 'repo', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'one')
+    const first = (await git('-C', 'repo', 'rev-parse', 'HEAD')).stdout.trim()
+    writeFileSync(join(dir, 'repo', 'two'), 'two')
+    await git('-C', 'repo', 'add', 'two')
+    await git('-C', 'repo', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '-m', 'two')
+    const second = (await git('-C', 'repo', 'rev-parse', 'HEAD')).stdout.trim()
+    expect(first).not.toBe(second)
+    await expect(check('repo', first)).resolves.toBe(true)
+    await expect(check('repo', second)).resolves.toBe(true)
+    await expect(check('repo', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef')).resolves.toBe(false)
+    await expect(check('real', first)).resolves.toBe(false)
+    await expect(check('missing', first)).resolves.toBe(false)
+    await expect(check('repo', 'not-a-commit')).resolves.toBe(false)
   })
 })
 

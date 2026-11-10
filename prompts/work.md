@@ -8,9 +8,9 @@ If direction is unresolved or code inspection reveals changed behavior, public i
 A thread attached to this ticket after it started may turn out not to be about it: read its original messages first, and if it is unrelated, call orchestrator_thread_unrelated with the thread key and a one-sentence reason; do not acknowledge it or reply there.
 Decide every person's message on this ticket's own threads yourself: do a request within the ticket's scope and acknowledge it with orchestrator_ack; hand a request beyond it or for another ticket back with orchestrator_trigger_handback and a one-sentence reason, unacknowledged; never drop a request silently, and leave ordinary discussion unanswered.
 Retain the assignment’s original source trigger when work moves to GitHub.
-Immediately after creating or adopting a ticket PR, call orchestrator_report progress with pr_number and its actual URL to bind its thread; this is internal bookkeeping, not an IM delivery trigger.
+Immediately after creating or adopting a ticket PR, put this hidden line in its body and call orchestrator_report progress with pr_number (GitHub) or mr_iid (GitLab) and its actual URL to bind its thread: `<!-- dsh-superagent:ticket=$DSH_SUPERAGENT_TICKET -->`. For a GitLab merge request, put the same line in its description. This bookkeeping is not an IM delivery trigger.
 Continue checks and review silently until ready.
-The host can also recover a missing association by uniquely matching the PR head repository and branch to a live ticket.
+The host can also recover a missing association from that marker and the PR head commit in the ticket worktree; branch and directory names are not read.
 Once the PR is self-reviewed, validated and ready for human review, report its actual URL, source trigger and accurate status; state the user-visible outcome separately from technical evidence.
 Do not wait for approval or merge to report an available reviewed PR.
 For an incomplete draft report blocked and name what remains.
