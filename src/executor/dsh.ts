@@ -98,9 +98,10 @@ export function mandateInstructions(mandate: Pick<Mandate, 'strength'>): string 
 }
 /** Builds a newly accepted ticket's Execution metadata: its ticket name, workspace directory, and assignment text. */
 export function ticketExecution(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>, settings: Settings,
-  stateDir: string, tickets: readonly Ticket[] = []): Execution {
+  stateDir: string, tickets: readonly Ticket[] = [], request = ''): Execution {
   const name = ticketWorktreeName(outcome.name ?? '', ticket.id)
-  const directory = chooseWorkspace(executionRoot(settings, stateDir), workspaceTarget(ticket.target), tickets, outcome.name ?? '')
+  const directory = chooseWorkspace(executionRoot(settings, stateDir), workspaceTarget(ticket.target), tickets, outcome.name ?? '',
+    { title: outcome.title, scope: outcome.scope, request })
   const source = ticket.origin.triggerId
   const note = outcome.note ? `\nRouting note (not the source request): ${outcome.note}` : ''
   const ruleIds = ticket.mandate.basis.rules
@@ -255,7 +256,10 @@ export class DshExecutor implements Executor {
   }
   /** Populates a newly accepted ticket's `execution` attributes (ticket name, workspace directory, and assignment text). */
   prepare(ticket: Ticket, outcome: Extract<AssessmentOutcome, { kind: 'accept' }>): Ticket {
-    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir, this.host.store.tickets.list()) }
+    // The request text describes the work's subject, which a local-only ticket uses to find a matching free workspace.
+    const request = ticket.origin.triggerIds.flatMap(id => this.host.store.triggers.get(id)?.text ?? []).join('\n')
+    return { ...ticket, execution: ticketExecution(ticket, outcome, this.host.store.settings(), this.host.machine.stateDir,
+      this.host.store.tickets.list(), request) }
   }
   /**
    * Records a pre-upgrade Ticket's execution target once, before its first launch: `targetResolved` keeps a local-only
