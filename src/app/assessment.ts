@@ -16,7 +16,7 @@ import { AcknowledgementSchema } from './tools/tool.ts'
 import type { Effects } from './effects.ts'
 
 /** Schema for a short lowercase kebab-case English ticket worktree name (1–4 words, at most 32 characters). */
-export const WorktreeNameSchema = z.string().max(32).regex(/^[a-z]+(?:-[a-z0-9]+){0,3}$/, 'Use 1–4 short English words in lowercase kebab-case, at most 32 characters').describe('Meaningful short English ticket name, e.g. fix-plan-color. Translate Chinese titles into English; no Chinese, pinyin or generic ticket names. 1–4 lowercase words in kebab-case, at most 32 characters.')
+export const WorktreeNameSchema = z.string().max(32).regex(/^[a-z]+(?:-[a-z0-9]+){0,3}$/, 'Use 1–4 short English words in lowercase kebab-case, at most 32 characters').describe('Meaningful short English name of the work\'s subject, e.g. fix-plan-color; it also names a new local-only workspace. Translate Chinese titles into English; no Chinese, pinyin or generic names. 1–4 lowercase words in kebab-case, at most 32 characters.')
 /** Schema for the main Session's proactive candidate assessment decision (`orchestrator_eval_decide`). */
 export const AssessmentSchema = z.object({
   decision: z.enum(['accept', 'ignore', 'unavailable']),
