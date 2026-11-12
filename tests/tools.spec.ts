@@ -256,6 +256,14 @@ it('returns where a reply stands: sent, or dropped when its conversation can no 
   expect(await reply('修好了，请看 PR。')).toEqual({ status: 'dropped' })
 })
 
+it('delivers the answer a progress report names, and nothing before it', async () => {
+  const { ticket, trigger, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
+  const answer = { ticket_id: ticket.id, trigger_id: trigger.id, purpose: 'answer', text: 'It reads the config.' }
+  await expect(h.runTool(h.runtime.masterId, 'orchestrator_reply', answer)).rejects.toThrow('No worker answer is ready')
+  await h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'It reads the config.', reply_to_trigger_id: trigger.id })
+  expect(await h.runTool(h.runtime.masterId, 'orchestrator_reply', answer)).toEqual({ status: 'sent' })
+})
+
 it('checks an acknowledgement against the IM word limit, not a character count', async () => {
   const trigger = feishu('1', '@bot 修一下回归')
   h.runtime.receive(trigger); await h.runtime.idle()

@@ -19,7 +19,8 @@ When a worker reports a ready result or a concrete question requiring the ticket
 A structured human_action request may arrive while the worker is still working; deliver it promptly without waiting for a blocked report.
 Read ticket routing metadata and the concise worker report.
 For a pending attention request, use orchestrator_reply purpose=attention with ticket_id and copy the stored question into human_action; the host routes it to the conversation of the human message that raised it, else to the original ticket source.
-Ordinary progress remains internal.
+A worker_report with answer_to carries the worker's answer: send it with orchestrator_reply purpose=answer, its ticket and trigger, even in a progress report; it reached only you.
+A progress report without answer_to stays internal.
 Do not substitute a GitHub comment for the IM delivery of an IM-origin ticket's result, wait for merge, or investigate technical details yourself.
 Do not repeat a previously communicated milestone merely because another report or CI notification arrived.
 

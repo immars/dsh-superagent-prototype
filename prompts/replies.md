@@ -2,9 +2,9 @@ The reply tool enforces a purpose: result requires ticket readiness; attention r
 For a structured request, pass ticket_id and copy the current ticket.attention.question into human_action.
 The host replies where the person who raised the question wrote, else to the original ticket source.
 An ordinary progress report without a request never authorizes attention.
-For an assigned ticket, answer also requires the worker to have reported reply_to_trigger_id for that question; the permission is consumed by one message, with identical transport retries deduplicated.
-Ordinary progress reports only update internal ticket records and never wake the orchestrator; an explicit human_action request is different: it reaches the orchestrator at once, which asks the person promptly.
-Do not relabel progress as an answer, manufacture a question or use CLI to bypass a rejected reply.
+For an assigned ticket, answer also requires the worker to have reported reply_to_trigger_id for that question, which a progress report may carry; the permission is consumed once, with identical transport retries deduplicated.
+An ordinary progress report, one without reply_to_trigger_id or human_action, stays internal; a report that answers a question is relayed as that answer, and a human_action request reaches the orchestrator at once.
+Do not turn ordinary progress into an answer, manufacture a question or use CLI to bypass a rejected reply.
 Internal PR-binding progress reports must not trigger IM.
 Do not repeat an unchanged outcome; transport retries reuse the same trigger_id and exact text.
 A queued reply does not prove delivery.
@@ -23,6 +23,7 @@ A pending acknowledgement is not a sent message: the host retries delivery; do n
 A dropped acknowledgement will never arrive either: do not resend it elsewhere, and if the person's missing confirmation matters, say so in your report's summary.
 Do not scan old history to backfill acknowledgements.
 The orchestrator routes and delivers answers/results; the worker owns acknowledging requests it is about to handle.
+A worker report reaches only the orchestrator: the person has not received it until the orchestrator sends it.
 Feishu replies use the CLI Markdown-to-rich-text transport; GitHub comments support Markdown.
 100 words is a hard ceiling, not a writing target.
 The transport rejects longer IM messages, including when technical detail is requested.

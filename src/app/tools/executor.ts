@@ -88,7 +88,7 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
         pr_number: z.number().int().positive().nullish().describe(`The ticket's PR in its GitHub target repository: its source PR, or one by ${host.github.deployment.github.login} in that repository. A local-only ticket has no repository target, so it reports without pr_number.`),
         mr_iid: z.number().int().positive().nullish().describe('The ticket\'s merge request in its GitLab target project: its source merge request, or one by the configured agent account in that project. Use instead of pr_number for a GitLab target.'),
-        reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
+        reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers, including in a progress report; omit it for an ordinary progress update.'),
       }).strict(),
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)

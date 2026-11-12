@@ -964,5 +964,10 @@ describe('the Executor\'s parts', () => {
       answers: 'tr9' })!
     expect(ready.id).toMatch(/^report:/)
     expect(JSON.parse(ready.text)).toMatchObject({ kind: 'worker_report', ticket: { ticket_id: 't1' }, trigger_id: 'tr1', state: 'ready', answer_to: 'tr9', summary: 'Done' })
+    // A progress report that names the question it answers is relayed too, so the orchestrator can deliver it.
+    const answering = reportRelay({ ...ticket, attention: undefined } as unknown as Ticket, { state: 'progress', summary: 'It reads the config.',
+      answers: 'tr9' })!
+    expect(JSON.parse(answering.text)).toMatchObject({ kind: 'worker_report', ticket: { ticket_id: 't1' }, trigger_id: 'tr1',
+      state: 'progress', answer_to: 'tr9', summary: 'It reads the config.' })
   })
 })
