@@ -57,6 +57,16 @@ it('assembles every role from fixed sections around the team sections, whatever 
   expect(composePrompt(config, 'worker')).not.toContain(mainAdmissionPolicy)
 })
 
+it('sends the answer a worker report names, also from a progress report, and keeps ordinary progress internal', () => {
+  const main = composePrompt(defaultPrompts(), 'orchestrator')
+  expect(main).toContain('A worker_report with answer_to carries the worker\'s answer')
+  expect(main).toContain('purpose=answer')
+  expect(main).toContain('even in a progress report')
+  expect(guides.replies).toContain('which a progress report may carry')
+  expect(guides.replies).not.toContain('Do not relabel progress as an answer')
+  expect(composePrompt(defaultPrompts(), 'worker')).toContain('a progress report may carry an answer')
+})
+
 it('reads a prompt file whatever its line ends and blank lines, and names a missing or empty one', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prompt-file-'))
   // promptFile resolves paths relative to prompts/; use a relative path to reach the temp dir.
