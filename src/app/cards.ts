@@ -47,6 +47,7 @@ export function inputLine(ticket: Ticket, input: TicketInput, worker = false) {
   const names = input.kind === 'trigger' || input.kind === 'resumed' ? { trigger_id: input.triggerId }
     : input.kind === 'reopen' && !worker ? { decision_id: input.decisionId }
     : input.kind === 'scheduled-run' ? { scheduled_for: input.scheduledFor, ...read }
+    : input.kind === 'watch-ended' ? { watch_id: input.watchId, status: input.status, ...read }
     : input.kind !== 'text' ? read
     : input.text.length <= INPUT_TEXT ? { text: input.text }
     : { preview: preview(input.text).slice(0, INPUT_TEXT), chars: input.text.length, ...read }

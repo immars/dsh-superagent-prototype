@@ -89,6 +89,13 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         pr_number: z.number().int().positive().nullish().describe(`The ticket's PR in its GitHub target repository: its source PR, or one by ${host.github.deployment.github.login} in that repository. A local-only ticket has no repository target, so it reports without pr_number.`),
         mr_iid: z.number().int().positive().nullish().describe('The ticket\'s merge request in its GitLab target project: its source merge request, or one by the configured agent account in that project. Use instead of pr_number for a GitLab target.'),
         reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers, including in a progress report; omit it for an ordinary progress update.'),
+        watch: z.object({
+          label: z.string().trim().min(1).max(80),
+          pid: z.number().int().positive().optional(),
+          file: z.string().trim().min(1).optional(),
+          note: z.string().trim().max(500).optional(),
+          expires_in_hours: z.number().int().min(1).max(720).optional(),
+        }).strict().optional().describe('Arm a completion watch for detached work: give pid or file, and a label. The runtime wakes you with a watch-ended Input when it ends or expires; use with a progress report before you hand back, and do not poll it.'),
       }).strict(),
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
@@ -104,6 +111,9 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
             ? 'This ticket\'s execution target is not a GitLab project; a merge request cannot be bound'
             : 'This ticket has no repository target; merge requests are unavailable. Report without mr_iid')
         }
+        if (args.watch && args.state !== 'progress') {
+          throw new Error('A completion watch needs a progress report; the Executor records the waiting turn end')
+        }
         const pull = args.pr_number != null ? await readPull(github!, args.pr_number, signal) : undefined
         const merge = args.mr_iid != null ? await readMerge(gitlab!, args.mr_iid, signal) : undefined
         // Claim the change request, record the report, and queue the relay atomically so a rejected claim or invalid report
@@ -113,12 +123,16 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
           if (refused) throw new Error(refused)
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),
             ...(args.question_for_trigger_id ? { askedBy: args.question_for_trigger_id } : {}),
-            ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}) }
+            ...(args.reply_to_trigger_id ? { answers: args.reply_to_trigger_id } : {}),
+            ...(args.watch ? { watch: { label: args.watch.label, ...(args.watch.pid !== undefined ? { pid: args.watch.pid } : {}),
+              ...(args.watch.file !== undefined ? { file: args.watch.file } : {}), ...(args.watch.note !== undefined ? { note: args.watch.note } : {}),
+              ...(args.watch.expires_in_hours !== undefined ? { expiresInHours: args.watch.expires_in_hours } : {}) } } : {}) }
           const updated = host.engine.report(ticketId, report)
           const relay = reportRelay(updated, report)
           if (relay) host.sessions.relay(relay.id, relay.text)
           const notification = relay ? 'orchestrator' : 'internal_only'
-          return { reported: true, notification, ...(updated.attention ? { attention: updated.attention } : {}) }
+          const watch = args.watch ? updated.watches?.filter(item => item.label === args.watch!.label).at(-1) : undefined
+          return { reported: true, notification, ...(updated.attention ? { attention: updated.attention } : {}), ...(watch ? { watch_id: watch.id } : {}) }
         })
       },
     }),

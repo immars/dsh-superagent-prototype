@@ -2,6 +2,30 @@
 import type { Reason } from './reasons.ts'
 import type { Schedule } from './schedule.ts'
 
+/** What a completion watch becomes true on: a local process that ends, or a marker file that appears. */
+export type WatchCondition =
+  | { kind: 'process'; pid: number }
+  | { kind: 'file'; path: string }
+/** A completion watch on a Ticket: when detached work finishes or the watch expires, an automatic Input wakes the worker. */
+export interface CompletionWatch {
+  id: string
+  label: string
+  condition: WatchCondition
+  /** What the waking turn should inspect, such as a log and marker file. */
+  note?: string
+  createdAt: string
+  /** When the clock reports `expired` rather than waiting longer. */
+  expiresAt: string
+}
+/** What a worker registers with a waiting or progress report; the Ticket gives it an id and an expiry. */
+export interface WatchRequest {
+  label: string
+  pid?: number
+  file?: string
+  note?: string
+  expiresInHours?: number
+}
+
 /** Actor identity in the source's own vocabulary; Policy decides which actors may originate work on that Source. */
 export interface ActorRef { source: string; id: string }
 /** Thread identity; the rule that derives `id` from a native event belongs to the source. */
@@ -255,6 +279,8 @@ export type TicketInput =
   | { id: string; kind: 'resumed'; triggerId: string; at: string }
   /** One run of a periodic task, fired by the clock at `scheduledFor`; the id is derived from that instant. */
   | { id: string; kind: 'scheduled-run'; scheduledFor: string; at: string }
+  /** A completion watch fired or expired; the id is derived from the watch, so it is recorded once. */
+  | { id: string; kind: 'watch-ended'; watchId: string; label: string; status: 'ended' | 'expired'; condition: WatchCondition; note?: string; at: string }
   | { id: string; kind: 'text'; text: string; at: string }
   /** A fact the main Session gave the ticket from other work: context, which asks for nothing and grants nothing. */
   | { id: string; kind: 'note'; text: string; at: string }
@@ -328,6 +354,8 @@ export interface Ticket {
    * `nextAt` into a `scheduled-run` Input and advances it in one transaction; a `ready` report does not end the Ticket.
    */
   schedule?: Schedule
+  /** Completion watches arming a wake-up when detached work ends or a watch expires. */
+  watches?: CompletionWatch[]
 }
 /**
  * A Thread a ticket follows, by its key: `own` when the ticket opened it, such as its own pull request, and when and how it

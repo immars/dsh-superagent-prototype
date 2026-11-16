@@ -1,19 +1,23 @@
 /** Tickets: their lifecycle from an accept to their end, their Subscriptions and their Inputs. */
+import { isAbsolute, resolve } from 'node:path'
 import { key } from './ids.ts'
 import { UserError } from './errors.ts'
 import { latestAssignment, latestReport, liveTicket, readUntil, runningAssignment, settled, threadKey, waitsForPerson } from './model.ts'
-import type { Assignment, ChannelRef, Evaluation, ExecutionTarget, Follow, Mandate, PolicyEffect, ThreadRef, Ticket, TicketEndBy, TicketInput,
-  TicketOutcome, Trigger, TriggerDisposition } from './model.ts'
+import type { Assignment, ChannelRef, CompletionWatch, Evaluation, ExecutionTarget, Follow, Mandate, PolicyEffect, ThreadRef, Ticket,
+  TicketEndBy, TicketInput, TicketOutcome, Trigger, TriggerDisposition, WatchCondition, WatchRequest } from './model.ts'
 import type { AssessmentOutcome } from './ports.ts'
 import { EnginePart, type EngineOptions } from './part.ts'
 import type { Replies } from './replies.ts'
 import { canRetry } from './stage.ts'
 import { nextScheduleAt, scheduleOf, scheduledBusy } from './schedule.ts'
 
+/** The most completion watches one Ticket may hold, the default lifetime, and the longest one. */
+const MAX_WATCHES = 8, WATCH_HOURS = 168, WATCH_MAX_HOURS = 720
+const invalidWatch = (reason: string): UserError => new UserError('invalidWatch', { reason })
 const sameChannel = (a: ChannelRef, b: ChannelRef): boolean => JSON.stringify(a) === JSON.stringify(b)
-/** Whether an Input is a message no person wrote, such as CI's, a bot's, the main Session's note, or the clock's run. */
+/** Whether an Input is a message no person wrote, such as CI's, a bot's, the main Session's note, the clock's run, or a watch's end. */
 export const automatic = (input: TicketInput | undefined): boolean => input?.kind === 'note' || input?.kind === 'scheduled-run'
-  || (input?.kind === 'trigger' && !input.human)
+  || input?.kind === 'watch-ended' || (input?.kind === 'trigger' && !input.human)
 /**
  * Whether a ticket's worker read a Trigger Input before `until`, its latest report or turn end: its Session took the message
  * into a step before then. One delivered before reads were recorded counts as read once it reached the worker by then.
@@ -160,6 +164,64 @@ export class Tickets extends EnginePart {
     const ticket = this.require(ticketId)
     if (!liveTicket(ticket) || runningAssignment(ticket)?.report?.state !== 'waiting') return false
     this.addInput(ticket, { id: `status:${ticketId}:${ticket.updatedAt}`, kind: 'text', text: STATUS_REQUEST, at: this.now() })
+    return true
+  }
+  /**
+   * Add a completion watch from a worker's report: validate its one condition, label, note and lifetime, resolve a relative
+   * marker path against the Ticket workspace, deduplicate the same condition and label, and enforce the per-Ticket limit.
+   * The caller saves the Ticket in the same transaction.
+   * @throws UserError when the watch is invalid or the Ticket already holds eight.
+   */
+  addWatch(ticket: Ticket, request: WatchRequest, at: string): CompletionWatch {
+    if (!liveTicket(ticket)) throw new UserError('ticketEnded')
+    const label = request.label.trim()
+    if (!label || label.length > 80) throw invalidWatch('label must be 1 to 80 characters')
+    const note = request.note?.trim()
+    if (note && note.length > 500) throw invalidWatch('note must be at most 500 characters')
+    const { pid } = request
+    if ((pid === undefined) === (request.file === undefined)) throw invalidWatch('give exactly one of pid or file')
+    let condition: WatchCondition
+    if (pid !== undefined) {
+      if (!Number.isInteger(pid) || pid <= 0) throw invalidWatch('pid must be a positive integer')
+      condition = { kind: 'process', pid }
+    } else {
+      const file = request.file!.trim()
+      if (!file) throw invalidWatch('file must not be empty')
+      const path = isAbsolute(file) ? file : ticket.execution?.directory ? resolve(ticket.execution.directory, file) : undefined
+      if (!path) throw invalidWatch('a relative file needs the Ticket workspace')
+      condition = { kind: 'file', path }
+    }
+    const hours = request.expiresInHours ?? WATCH_HOURS
+    if (!Number.isInteger(hours) || hours < 1 || hours > WATCH_MAX_HOURS) throw invalidWatch(`expires_in_hours must be 1 to ${WATCH_MAX_HOURS}`)
+    const watches = ticket.watches ?? []
+    const conditionKey = (item: CompletionWatch): string => item.condition.kind === 'process' ? `process:${item.condition.pid}` : `file:${item.condition.path}`
+    const wanted = condition.kind === 'process' ? `process:${condition.pid}` : `file:${condition.path}`
+    const existing = watches.find(item => item.label === label && conditionKey(item) === wanted)
+    if (existing) return existing
+    if (watches.length >= MAX_WATCHES) throw invalidWatch(`a Ticket may hold at most ${MAX_WATCHES} completion watches`)
+    const watch: CompletionWatch = { id: key('watch', ticket.id, wanted, label), label, condition,
+      ...(note ? { note } : {}), createdAt: at, expiresAt: new Date(Date.parse(at) + hours * 3_600_000).toISOString() }
+    ticket.watches = [...watches, watch]
+    ticket.updatedAt = at
+    return watch
+  }
+  /**
+   * Fire one completion watch: remove it and record a `watch-ended` Input in the caller's transaction, so a replayed check
+   * cannot record it twice and the normal delivery path wakes the idle worker.
+   * @returns Whether a watch was found and fired.
+   * @throws UserError when the Ticket is unknown.
+   */
+  fireWatch(ticketId: string, watchId: string, status: 'ended' | 'expired'): boolean {
+    const ticket = this.require(ticketId)
+    if (!liveTicket(ticket)) return false
+    const watch = ticket.watches?.find(item => item.id === watchId)
+    if (!watch) return false
+    const at = this.now()
+    ticket.watches = ticket.watches!.filter(item => item.id !== watchId)
+    if (!ticket.watches.length) delete ticket.watches
+    const input: TicketInput = { id: key('input', ticket.id, 'watch-ended', watch.id), kind: 'watch-ended', watchId: watch.id,
+      label: watch.label, status, condition: watch.condition, ...(watch.note ? { note: watch.note } : {}), at }
+    this.addInput(ticket, input)
     return true
   }
   /**
@@ -394,7 +456,7 @@ export class Tickets extends EnginePart {
       && (!readBefore(input, until) || ticket.undelivered.includes(input.id)) ? [input.id] : []))
     // An end dated earlier, such as a PR's merge, does not move the ticket's last change back.
     ticket.ended = { at, by, outcome, ...why }; ticket.undelivered = []; ticket.updatedAt = this.now()
-    delete ticket.attention; delete ticket.delivery
+    delete ticket.attention; delete ticket.delivery; delete ticket.watches
     // The Assignments the end stops end with it; the ticket's end says why.
     for (const assignment of stopping) { assignment.state = 'ended'; assignment.endedAt = at }
     this.repo.tickets.save(ticket)

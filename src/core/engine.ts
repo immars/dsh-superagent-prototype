@@ -74,6 +74,15 @@ export class Engine {
    */
   fireScheduled(ticketId: string): boolean { return this.repo.atomic(() => this.tickets.fireScheduled(ticketId)) }
   /**
+   * Fire one completion watch: remove it and record a `watch-ended` Input in one transaction, so a replayed check cannot
+   * record it twice. The normal delivery path wakes the idle worker or steers the running Assignment.
+   * @returns Whether a watch was found and fired.
+   * @throws UserError when the ticket is unknown.
+   */
+  fireWatch(ticketId: string, watchId: string, status: 'ended' | 'expired'): boolean {
+    return this.repo.atomic(() => this.tickets.fireWatch(ticketId, watchId, status))
+  }
+  /**
    * Requeues overdue Evals up to `REQUEUES` times before recording `unavailable` (undelivered Evals never expire), starts the
    * Evals of Threads whose queued Triggers wait, and resumes ended tickets a person's message reached while processing was
    * paused. While processing is paused, nothing expires: each Eval in progress notes when the pause began, and its deadline
@@ -268,6 +277,8 @@ export class Engine {
 export type EngineForSources = Pick<Engine, 'receive' | 'bindThread' | 'threadClosed'>
 /** What the clock asks of the Engine. */
 export type EngineForSchedules = Pick<Engine, 'fireScheduled'>
+/** What the completion-watch clock asks of the Engine. */
+export type EngineForWatches = Pick<Engine, 'fireWatch'>
 /** What the main Session asks of the Engine. */
 export type EngineForMainSession = Pick<Engine, 'candidate' | 'candidateDelivered' | 'decide' | 'attach' | 'reply' | 'requestStatus' | 'note'>
 /** What people ask of the Engine, through the panel or the main Session. */

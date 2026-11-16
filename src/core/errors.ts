@@ -35,6 +35,7 @@ export const USER_ERRORS = {
   noAnswer: ['refused', 'No worker answer is ready for this human trigger. Wait for the worker\'s report, or request one with orchestrator_ticket_request_status, which acts only on a worker that reported waiting; ordinary progress cannot be relabelled as an answer.'],
   noChannel: ['refused', 'No reply channel for this ticket or trigger'],
   invalidSchedule: ['refused', 'Invalid schedule: {reason}'],
+  invalidWatch: ['refused', 'Invalid completion watch: {reason}'],
   scheduleNoChannel: ['refused', 'A periodic task needs a conversation that can receive its results; this request has no Channel'],
   panelOnlyEnvironment: ['refused', 'The execution environment (ticket directory, prepare command, blocked commands) can only be changed in the management panel'],
   panelOnlyAccounts: ['refused', 'Source fields that setup reads, such as account CLIs, can only be changed in the management panel'],
