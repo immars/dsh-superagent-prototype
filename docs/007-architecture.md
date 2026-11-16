@@ -318,6 +318,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/app/setup.ts` | Setup, and `setupChanged`, whether a save changes a field setup reads |
 | `src/app/passes.ts` | Passes, the pass scheduler |
 | `src/app/schedules.ts` | The `Schedules` clock: a due `nextAt` becomes one scheduled run, and its pause and health entry |
+| `src/app/watches.ts` | The `Watches` clock: a finished process or an appeared marker becomes one `watch-ended` Input, and its pause and health entry |
 | `src/app/outbox.ts` | The Outbox: the Engine's `Outbox` port, the receipts and the `reply` effects that send them |
 | `src/app/notices.ts` | The main Session's notices and relays: `eventNotice`, `reportRelay`, `resultRelay` and `followupRelay` |
 | `src/app/store.ts` | The Store, and `Receipt`, a message of the outbox |
@@ -423,6 +424,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/stage.spec.ts` | The Ticket stages, row by row, including a periodic task between runs |
 | `tests/schedule.spec.ts` | Periodic schedules: validation, minute/hour/day/week boundary math in several zones, DST and interval rules, and the busy task |
 | `tests/schedules.spec.ts` | The schedule clock on a running Runtime: a due run once, the same worker, the open Ticket after a ready report, holds, pause, revalidation, late runs and health |
+| `tests/watches.spec.ts` | Completion watches on a running Runtime: a marker or process end, expiry, deduplication, limit, pause, Ticket end and the stored Input |
 | `tests/policy.spec.ts` | Source scope, the gate, the admission table, Mandate revalidation, the Policy version, settings migrations and assessment outcomes |
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |

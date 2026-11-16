@@ -38,7 +38,8 @@ interface Skill { name: string; description: string; content: string }
  * Lower this limit when shrinking model-facing text; raise it only intentionally and explain why in the commit message.
  * Raised from 59,000 to 60,500 for the orchestrator's periodic-task rules and the `schedule` accept field.
  */
-const BUDGET: Record<Role, number> = { orchestrator: 60_500, worker: 40_500 }
+// Completion watches add a small worker tool field and its guidance (docs/013).
+const BUDGET: Record<Role, number> = { orchestrator: 60_500, worker: 41_500 }
 const PROMPTS = 'prompts/, skills/', TOOLS = 'src/app/tools/', SESSIONS = 'src/app/sessions.ts'
 const NOTICES = 'src/app/notices.ts', LINKS = 'src/app/links.ts', ASSESSMENT = 'src/app/assessment.ts'
 const EXECUTOR = 'src/executor/dsh.ts', ERRORS = 'src/core/errors.ts'

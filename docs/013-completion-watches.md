@@ -1,12 +1,12 @@
 # 013 Completion watches for detached work
 
-**Status: proposal. This change contains documentation only. No runtime code changes until the design is accepted and implementation is scheduled.**
+**Status: accepted. This document is the design of record for completion watches; [003 Execution](003-execution.md) states the behaviour the implementation adds.**
 
 ## Summary
 
 A worker sometimes starts a process that must outlive its turn: an experiment, a long build, a model evaluation on a compute host. Such a process cannot stay a DSH shell job, so the worker detaches it and hands the Ticket back. When the process finishes, nothing wakes the worker, and the person who asked never hears the result until they ask again.
 
-This proposal adds **completion watches**. A worker registers a watch on its Ticket before it hands back, naming a local process ID or a marker file. A small clock in the runtime checks the condition about every 30 seconds without a model turn. When the condition holds, it records a `watch-ended` Input on the Ticket; the existing delivery path wakes the idle worker, which reads the output and reports the result. The watch is durable across restarts, fires at most once, and does not hold a worker slot while waiting.
+This change adds **completion watches**. A worker registers a watch on its Ticket before it hands back, naming a local process ID or a marker file. A small clock in the runtime checks the condition about every 30 seconds without a model turn. When the condition holds, it records a `watch-ended` Input on the Ticket; the existing delivery path wakes the idle worker, which reads the output and reports the result. The watch is durable across restarts, fires at most once, and does not hold a worker slot while waiting.
 
 This builds on [003 Execution](003-execution.md), which describes background work and worker slots, and on [012 Periodic tasks](012-periodic-tasks.md), whose clock is the precedent for a condition-independent runtime timer.
 
@@ -19,7 +19,7 @@ A worker's background work is visible to the runtime only while it is a DSH shel
 - At handoff, subagents stop and shell jobs are left to the person but their endings are deliberately collected: they do not wake the worker or reserve a slot.
 - A detached process (`nohup`, `setsid`, a process started on another host) is not a Session job at all.
 
-A training run of several hours therefore cannot be a managed job. The worker launches it detached, reports `waiting`, and the Ticket becomes idle. When the process exits, no runtime event exists. The Ticket stays idle; the original conversation receives nothing. The only way to learn the result is for a person to ask, which is the failure this proposal fixes.
+A training run of several hours therefore cannot be a managed job. The worker launches it detached, sends a progress report, and the Ticket becomes idle when its turn ends. When the process exits, no runtime event exists. The Ticket stays idle; the original conversation receives nothing. The only way to learn the result is for a person to ask, which is the failure this change fixes.
 
 The fix cannot be "keep the job", because that would hold a worker slot, a concurrency position and a model context for the whole run, and the 30-minute limit would kill it anyway. It cannot be "wake on a left job's end" alone either: that only covers a job the Session still owns, not a process that was detached or started on another machine, and it does not survive a host restart.
 
@@ -27,7 +27,7 @@ The fix cannot be "keep the job", because that would hold a worker slot, a concu
 
 | Requirement | Design |
 | --- | --- |
-| A worker can register a completion condition before it hands back | An optional `watch` on the waiting `orchestrator_report` call |
+| A worker can register a completion condition before it hands back | An optional `watch` on the worker's `progress` report |
 | Detect the end without a model turn or a held slot | Runtime clock checks a PID or a marker file about every 30 seconds |
 | The person receives the result | The clock records an Input; the worker wakes, reports, and the existing reply path sends the result |
 | Survive a restart | Watches are stored on the Ticket; a late result is delivered once after startup |
@@ -68,10 +68,10 @@ interface CompletionWatch {
 
 ### Registering a watch
 
-The waiting report that hands the Ticket back carries the watch. The existing worker-only `orchestrator_report` tool gains one optional `watch` field:
+The progress report a worker sends before it hands the Ticket back carries the watch; the Executor records the waiting turn end afterwards. The existing worker-only `orchestrator_report` tool gains one optional `watch` field:
 
 ```json
-{ "state": "waiting", "summary": "Training started; a completion watch is armed.",
+{ "state": "progress", "summary": "Training started; a completion watch is armed.",
   "watch": { "label": "training run", "file": ".dsh/train.done",
     "note": "Read train.log and .dsh/train.done; the exit status is in the marker.", "expires_in_hours": 168 } }
 ```
@@ -79,7 +79,7 @@ The waiting report that hands the Ticket back carries the watch. The existing wo
 Rules:
 
 - Exactly one of `pid` and `file` is required; a relative `file` resolves against the Ticket workspace and is stored absolute.
-- The report state is `waiting` or `progress`: a `ready`, `blocked`, `failed` or `dropped` report cannot arm a watch, because the Ticket may end or wait for a person instead.
+- The report state is `progress`: a `ready`, `blocked`, `failed` or `dropped` report cannot arm a watch, because the Ticket may end or wait for a person instead. The `waiting` report the Executor records at turn end keeps it.
 - `label` is 1–80 characters and `note` at most 500.
 - `expires_in_hours` is 1–720, default 168 (seven days).
 - A Ticket has at most eight live watches; the report refuses a ninth with a clear error.
@@ -95,7 +95,7 @@ mkdir -p .dsh
 nohup sh -c 'python train.py > train.log 2>&1; echo $? > .dsh/train.done' >/dev/null 2>&1 &
 ```
 
-then register the `file` condition on `.dsh/train.done` (resolved against the workspace), and report `waiting` with a short summary. Reporting `waiting` is deliberate: an ordinary `ready` report ends the Ticket, and a `blocked` report says a person must act. A worker must not poll the process itself, and must not leave a watch when it has already read the result.
+then register the `file` condition on `.dsh/train.done` (resolved against the workspace) in a `progress` report with a short summary. The Executor records the waiting turn end after it. An ordinary `ready` report ends the Ticket, and a `blocked` report says a person must act. A worker must not poll the process itself, and must not leave a watch when it has already read the result.
 
 ### The clock
 
@@ -170,22 +170,22 @@ This keeps arbitrary remote commands in the worker's own shell, where the existi
 - **File condition only for remote work.** A generic command condition would cover more cases but would execute worker-supplied commands outside the Session. It is deliberately left out of v1; the local monitor pattern covers remote jobs with existing permissions.
 - **No per-watch panel list in v1.** The Ticket record, the `watch-ended` Input line and the `watch` health entry are enough to observe it. A Ticket-detail list can be added later without changing the model.
 - **A watch outlives a worker's intent.** If a worker registers a watch and later reads the result itself, the watch fires once when the process ends; the worker sees that it is already handled and reports. A forgotten watch is also bounded by its expiry.
-- **Ready reports end the Ticket.** The design relies on the worker prompt telling it to report `waiting` after launching detached work. A Ticket that reports `ready` has completed and correctly receives no later watch. This is an instruction, not an enforced state; enforcement would change the meaning of `ready` for every Ticket and is out of scope.
+- **Ready reports end the Ticket.** The design relies on the worker prompt telling it to arm the watch on the progress report it sends before handing back. A Ticket that reports `ready` has completed and correctly receives no later watch. This is an instruction, not an enforced state; enforcement would change the meaning of `ready` for every Ticket and is out of scope.
 
 ## Implementation plan
 
 1. **Domain and Engine.** Add `CompletionWatch`, `Ticket.watches`, `watch-ended` inputs, and `Tickets.addWatch`, `removeWatch`, `fireWatch`. Extend `automatic`, input rendering, input lines and the Engine's executor/schedule-facing types. Drop watches when a Ticket ends.
 2. **Watch clock.** Add `src/app/watches.ts` with the 30-second tick, condition checks, pause and closing handling, health reporting, and runtime start/stop wiring. Register a `watch` health entry.
-3. **Worker report.** Extend `orchestrator_report` with the optional `watch` object, validate it before the report transaction, and record the watch in that transaction. Keep the schema compact: `tests/model-surface.spec.ts` holds the worker prompt plus tool schemas to a 40,500-character budget, so trim or measure if the addition exceeds it.
-4. **Delivery and prompts.** Render the `watch-ended` Input text and card line, add the locale string, and tell workers in `prompts/work.md` to register a watch and report `waiting` after launching detached work, rather than polling or reporting `ready`.
+3. **Worker report.** Extend `orchestrator_report` with the optional `watch` object, validate it before the report transaction, and record the watch in that transaction. Keep the schema compact: the `watch` field and its prompt guidance raised the worker surface budget in `tests/model-surface.spec.ts` from 40,500 to 41,500 characters.
+4. **Delivery and prompts.** Render the `watch-ended` Input text and card line, add the locale string, and tell workers in `prompts/work.md` to arm a watch on the progress report before handing back, rather than polling or reporting `ready`.
 5. **Tests.** A `tests/watches.spec.ts` with a fake clock for: a file appearing; a process ending; expiry; deduplication; the eight-watch limit; pause; ticket end; restart-late delivery; held automatic Input while waiting for a person; one Input and one wake per watch. Update the module and test tables in [007 Architecture](007-architecture.md), which `tests/docs.spec.ts` checks.
-6. **Documentation.** Update 003's background-work paragraph and 007's module and test tables; mark this document accepted when the implementation lands.
+6. **Documentation.** Update 003's background-work paragraph and 007's module and test tables; this document is accepted with the implementation.
 
 ## Acceptance checks
 
 | Check | How it is verified |
 | --- | --- |
-| A detached process' completion wakes an idle Ticket and the person receives a result | End-to-end test: report `waiting`, end the fake process, tick the clock, assert the Input is delivered and the worker's `ready` report is relayed |
+| A detached process' completion wakes an idle Ticket and the person receives a result | End-to-end test: send a progress report with a watch, end the fake process, tick the clock, assert the Input is delivered and the worker's `ready` report is relayed |
 | No model turn while waiting | Only a clock tick and an Input exist between launch and completion |
 | One notification per watch | Tick repeatedly after firing; assert one `watch-ended` Input and no watch |
 | A restart loses no completion | Store a live watch, recreate the runtime, tick; assert one Input |

@@ -40,6 +40,7 @@ Verify an existing PR's author, head branch and remote before updating it or ope
 Do not delete ticket directories or rewrite unrelated branches.
 Review changes and run relevant checks.
 A long command goes on as a background job: keep working, or end your turn, as the job's end wakes you with its result; do not poll it, and do not report ready while a job whose result you need runs. Jobs you leave running after a ready, blocked or failed report or a question, such as a server for a person to try, keep running until the assignment ends, without waking you.
+When work must outlive your turn, such as a training run, detach it with a marker and add `watch` to the progress report you send before handing the Ticket back: `{ label, pid }` or `{ label, file }`, with an optional `note` and `expires_in_hours`. The runtime checks it and wakes you with a `watch-ended` Input when it ends or expires; do not poll it yourself, and do not report `ready` for work that is still running.
 Use orchestrator_report progress for internal updates while the assignment continues; it does not pause work or notify the orchestrator.
 To answer an explicit human question, include reply_to_trigger_id with that original question trigger ID and put the answer in summary; a progress report may carry an answer, and the orchestrator delivers it as the answer.
 Never use reply_to_trigger_id for an ordinary progress update or a newly created unfinished PR.

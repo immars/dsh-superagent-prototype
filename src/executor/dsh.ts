@@ -169,6 +169,7 @@ export function inputMessage(input: TicketInput, trigger?: object, ticket?: Tick
   if (input.kind === 'policy-changed') return policyMessage(input.effect)
   if (input.kind === 'resumed') return RESUMED
   if (input.kind === 'scheduled-run') return scheduledRunMessage(input, ticket)
+  if (input.kind === 'watch-ended') return watchEndedMessage(input)
   if (input.kind === 'note') return `Note from the orchestrator, for context only: ${input.text}`
   return input.kind === 'text' ? input.text : undefined
 }
@@ -179,6 +180,15 @@ function scheduledRunMessage(input: Extract<TicketInput, { kind: 'scheduled-run'
   const task = ticket ? `The task: ${ticket.title}.${ticket.mandate.scope ? ` ${ticket.mandate.scope}` : ''}` : ''
   return [heading, `Scheduled for ${input.scheduledFor}; fired at ${input.at}.`, ...task ? [task] : [],
     'Do this run\'s work and report ready with its result. This Ticket stays open for the next run.'].join('\n')
+}
+/** Formats a completion watch's end or expiry: what finished, that the watch is removed, and what the turn should inspect. */
+function watchEndedMessage(input: Extract<TicketInput, { kind: 'watch-ended' }>): string {
+  const condition = input.condition.kind === 'process' ? `process ${input.condition.pid} is no longer running`
+    : `marker file ${input.condition.path} appeared`
+  const what = input.status === 'expired' ? `Completion watch "${input.label}" expired at ${input.at} before its condition was met.`
+    : `Completion watch "${input.label}" fired at ${input.at}: ${condition}.`
+  return [what, input.status === 'expired' ? 'Check whether the work is still running, then report the result or arm a later watch. The watch is removed.'
+    : 'Read the job\'s output and report the result. The watch is removed.', ...(input.note ? [`What to inspect: ${input.note}`] : [])].join('\n')
 }
 /**
  * Tracks active and starting worker sessions against the configured concurrency limit: a ticket holds a slot while its

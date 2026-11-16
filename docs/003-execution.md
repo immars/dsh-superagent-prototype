@@ -41,6 +41,8 @@ A handoff to a person frees the slot immediately and leaves the Report in effect
 
 At handoff, subagents stop. Shell jobs, such as a server offered for review, may continue until the Assignment ends. They hold no slot and are exempt from the 30-minute limit, including after later turns. Their completion does not wake the Executor; it reads the results on its next turn.
 
+A process that must outlive the turn, such as an experiment, can be detached and paired with a completion watch. The worker adds `watch` to its `progress` report with a local PID or a marker file, a label, an optional note and an expiry of at most 30 days. A 30-second runtime clock records a `watch-ended` Input when the condition holds or the watch expires; the normal delivery path then wakes the idle worker, which reads the output and reports. The watch is stored on the Ticket, holds no slot, survives restarts, fires at most once, is held while the Ticket waits for a person, and is dropped when the Ticket ends. A `waiting` report the Executor records at the end of the turn keeps the watch; a `ready`, `blocked`, `failed` or `dropped` report cannot arm one.
+
 A person can also start a turn by writing directly in the Executor Session. Its background work follows the same rules.
 
 When an Assignment ends, its shell jobs are killed without waking the Session. Its subagents are released, and any completion turns they wake are dropped. The replacement Assignment and its waiting Inputs start after that shutdown finishes.
