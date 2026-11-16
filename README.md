@@ -33,6 +33,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [010 Source instances](docs/010-source-instances.md): the proposal for several instances of one Source kind
 - [011 GitLab Source](docs/011-gitlab-source.md): how the GitLab Source polls a project, and what it leaves out
 - [012 Periodic tasks](docs/012-periodic-tasks.md): the proposal for tasks that run again on a schedule
+- [013 Completion watches](docs/013-completion-watches.md): the proposal for notifying a worker when detached work finishes
 
 ## Development
 
